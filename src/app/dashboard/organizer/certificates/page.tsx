@@ -1,28 +1,28 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { 
-    Award, 
-    Upload, 
-    Database, 
-    FileSpreadsheet, 
-    QrCode, 
-    Settings2, 
-    Download, 
-    CheckCircle2, 
-    AlertCircle, 
-    Search, 
-    RefreshCw, 
-    Eye, 
-    Sliders, 
-    Layers, 
-    Copy, 
-    Check, 
-    ExternalLink, 
-    Trash2, 
-    MousePointer, 
-    FileText, 
-    FileImage, 
+import {
+    Award,
+    Upload,
+    Database,
+    FileSpreadsheet,
+    QrCode,
+    Settings2,
+    Download,
+    CheckCircle2,
+    AlertCircle,
+    Search,
+    RefreshCw,
+    Eye,
+    Sliders,
+    Layers,
+    Copy,
+    Check,
+    ExternalLink,
+    Trash2,
+    MousePointer,
+    FileText,
+    FileImage,
     Archive,
     CheckSquare,
     Square,
@@ -34,8 +34,7 @@ import {
     X,
     Save,
     ChevronLeft,
-    ChevronRight,
-    CloudUpload
+    ChevronRight
 } from 'lucide-react'
 import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
@@ -380,7 +379,7 @@ const triggerFileDownload = (blobOrUrl: Blob | string, fileName: string) => {
             if (typeof blobOrUrl !== 'string' || blobOrUrl.startsWith('data:')) {
                 URL.revokeObjectURL(url)
             }
-        } catch {}
+        } catch { }
     }, 1500)
 }
 
@@ -391,6 +390,9 @@ export default function OrganizerCertificatesPage() {
     // Data Source: 'db' | 'excel'
     const [dataSource, setDataSource] = useState<'db' | 'excel'>('db')
     const [participants, setParticipants] = useState<ParticipantRecord[]>([])
+    const [dbParticipantsList, setDbParticipantsList] = useState<ParticipantRecord[]>([])
+    const [excelParticipantsList, setExcelParticipantsList] = useState<ParticipantRecord[]>([])
+    const [excelFileName, setExcelFileName] = useState<string>('')
     const [loadingParticipants, setLoadingParticipants] = useState(false)
     // Certificate Tier / Batch Mode
     const [selectedCertType, setSelectedCertType] = useState<CertificateType>('Participation')
@@ -511,7 +513,7 @@ export default function OrganizerCertificatesPage() {
             try {
                 localStorage.setItem('hackare_winner_count', String(clamped))
                 localStorage.setItem('hackare_winning_teams', JSON.stringify(trimmed))
-            } catch {}
+            } catch { }
             return trimmed
         })
         showToast('info', `Configured for ${clamped} winning teams.`)
@@ -523,7 +525,7 @@ export default function OrganizerCertificatesPage() {
             next[rankIndex] = teamName
             try {
                 localStorage.setItem('hackare_winning_teams', JSON.stringify(next))
-            } catch {}
+            } catch { }
             return next
         })
         if (teamName) {
@@ -695,7 +697,6 @@ export default function OrganizerCertificatesPage() {
     const [popupModal, setPopupModal] = useState<PopupModalData | null>(null)
     const [savingWinningTeams, setSavingWinningTeams] = useState(false)
     const [savingTemplate, setSavingTemplate] = useState(false)
-    const [syncingAllTemplates, setSyncingAllTemplates] = useState(false)
 
     // Category Download & Preview state
     const [selectedDownloadCategoryId, setSelectedDownloadCategoryId] = useState<string>('participation')
@@ -743,7 +744,7 @@ export default function OrganizerCertificatesPage() {
             try {
                 localStorage.setItem('hackare_winner_count', String(winnerCount))
                 localStorage.setItem('hackare_winning_teams', JSON.stringify(winningTeams))
-            } catch {}
+            } catch { }
 
             // 2. Persist to Supabase DB via PUT /api/organizer/winning-teams
             const res = await fetch('/api/organizer/winning-teams', {
@@ -854,7 +855,7 @@ export default function OrganizerCertificatesPage() {
                     const parsed = JSON.parse(savedTeams)
                     if (Array.isArray(parsed)) setWinningTeams(parsed)
                 }
-            } catch {}
+            } catch { }
         }
         syncWinningTeamsFromDb()
 
@@ -909,7 +910,7 @@ export default function OrganizerCertificatesPage() {
                             item.imageDataUrl = resJson.template.image_data_url
                             saveTemplateToIndexedDb(key, item)
                         }
-                    }).catch(() => {})
+                    }).catch(() => { })
                 }
             }
 
@@ -975,6 +976,7 @@ export default function OrganizerCertificatesPage() {
                     category: s.category || determineCategoryByYear(s.year),
                     selected: true
                 }))
+                setDbParticipantsList(formatted)
                 setParticipants(formatted)
             }
         } catch (e) {
@@ -985,10 +987,32 @@ export default function OrganizerCertificatesPage() {
         }
     }
 
+    const switchToDbMode = () => {
+        setActiveTab('studio')
+        setDataSource('db')
+        if (dbParticipantsList.length > 0) {
+            setParticipants(dbParticipantsList)
+        } else {
+            fetchDbParticipants()
+        }
+    }
+
+    const switchToExcelMode = () => {
+        setActiveTab('studio')
+        setDataSource('excel')
+        if (excelParticipantsList.length > 0) {
+            setParticipants(excelParticipantsList)
+        } else {
+            setParticipants([])
+            excelInputRef.current?.click()
+        }
+    }
+
     const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
         if (!file) return
 
+        setExcelFileName(file.name)
         const reader = new FileReader()
         reader.onload = (evt) => {
             try {
@@ -1045,9 +1069,10 @@ export default function OrganizerCertificatesPage() {
                     }
                 })
 
+                setExcelParticipantsList(parsed)
                 setParticipants(parsed)
                 setDataSource('excel')
-                showToast('success', `Parsed ${parsed.length} participants from spreadsheet!`)
+                showToast('success', `Parsed ${parsed.length} participants from spreadsheet "${file.name}"!`)
             } catch (err: any) {
                 console.error('Error parsing spreadsheet:', err)
                 showToast('error', 'Failed to parse file. Please upload a valid .xlsx, .xls, or .csv')
@@ -1176,7 +1201,7 @@ export default function OrganizerCertificatesPage() {
                 if (idbStore[newType]) {
                     targetData = idbStore[newType]
                 }
-            } catch {}
+            } catch { }
         }
 
         if (targetData && targetData.imageDataUrl) {
@@ -1352,7 +1377,7 @@ export default function OrganizerCertificatesPage() {
         setSavingTemplate(true)
         try {
             localStorage.setItem('hackare_cert_layout', JSON.stringify(layout))
-            
+
             // Update the active tier template in IndexedDB and Cloud
             const currentTierData = templateStore[selectedCertType] || {
                 fileName: `${selectedCertType} Template`,
@@ -1428,95 +1453,7 @@ export default function OrganizerCertificatesPage() {
         }
     }
 
-    // Push and synchronize all templates and coordinates from local store/IndexedDB to Supabase Cloud DB
-    const syncAllTemplatesToCloud = async () => {
-        setSyncingAllTemplates(true)
-        showToast('info', 'Connecting to Supabase Cloud to sync all templates and coordinates...')
 
-        try {
-            // 1. Gather all local templates from both memory state and IndexedDB
-            let allLocalTemplates: Record<string, TierTemplateData> = { ...templateStore }
-            try {
-                const idbTemplates = await loadAllTemplatesFromIndexedDb()
-                allLocalTemplates = { ...allLocalTemplates, ...idbTemplates }
-            } catch (e) {
-                console.warn('Error reading IndexedDB during sync:', e)
-            }
-
-            // Also ensure current active tier layout is included
-            if (templateImage) {
-                allLocalTemplates[selectedCertType] = {
-                    ...(allLocalTemplates[selectedCertType] || {}),
-                    fileName: templateFileName || `${selectedCertType} Template`,
-                    dimensions: templateDimensions,
-                    layout: layout,
-                    imageDataUrl: allLocalTemplates[selectedCertType]?.imageDataUrl || templateImage.src
-                }
-            }
-
-            const tierKeys = Object.keys(allLocalTemplates)
-            if (tierKeys.length === 0) {
-                showToast('error', 'No templates found in browser to sync. Please upload or configure templates first.')
-                setSyncingAllTemplates(false)
-                return
-            }
-
-            const syncedDetails: string[] = []
-            let successCount = 0
-
-            for (const tier of tierKeys) {
-                const tData = allLocalTemplates[tier]
-                if (!tData || !tData.imageDataUrl) continue
-
-                try {
-                    const res = await fetch('/api/organizer/certificate-templates', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            tier: tier,
-                            fileName: tData.fileName || `${tier} Template`,
-                            imageDataUrl: tData.imageDataUrl,
-                            dimensions: tData.dimensions || { width: 1920, height: 1080 },
-                            layout: tData.layout || layout
-                        })
-                    })
-                    const resJson = await res.json()
-                    if (resJson.success) {
-                        successCount++
-                        if (resJson.template?.image_data_url) {
-                            tData.imageDataUrl = resJson.template.image_data_url
-                            await saveTemplateToIndexedDb(tier, tData)
-                        }
-                        syncedDetails.push(`✅ ${tier}: Cloud CDN image & coordinates updated in Supabase`)
-                    } else {
-                        syncedDetails.push(`⚠️ ${tier}: ${resJson.error || 'Failed to sync'}`)
-                    }
-                } catch (err: any) {
-                    syncedDetails.push(`❌ ${tier}: ${err.message || 'Network error'}`)
-                }
-            }
-
-            // Update state store with newly synced URLs
-            setTemplateStore(allLocalTemplates)
-
-            setPopupModal({
-                isOpen: true,
-                type: 'success',
-                category: 'template',
-                title: '☁️ All Templates & Coordinates Synced to Cloud DB!',
-                message: `Successfully synchronized ${successCount} certificate template(s) and their calibrated coordinates to Supabase Cloud Storage & Database.`,
-                details: syncedDetails,
-                extraNote: 'All organizers across all devices on localhost and production can now see these exact templates and coordinates.'
-            })
-
-            showToast('success', `Synced ${successCount} template(s) and coordinates to Supabase Cloud!`)
-        } catch (err: any) {
-            console.error('Error syncing all templates:', err)
-            showToast('error', `Sync error: ${err.message || 'Unknown error'}`)
-        } finally {
-            setSyncingAllTemplates(false)
-        }
-    }
 
     // =========================================================================
     // 4. BATCH GENERATION & EXPORT
@@ -1958,9 +1895,9 @@ export default function OrganizerCertificatesPage() {
 
     // Helper to generate a rendered certificate canvas DataURL on-the-fly (super-fast direct QR painting)
     const renderSingleCertificateDataUrl = async (
-        participant: ParticipantRecord, 
-        tierId: string, 
-        format: 'png' | 'jpeg' = 'jpeg', 
+        participant: ParticipantRecord,
+        tierId: string,
+        format: 'png' | 'jpeg' = 'jpeg',
         quality = 0.88,
         customLayout?: LayoutConfig
     ): Promise<string> => {
@@ -2028,9 +1965,9 @@ export default function OrganizerCertificatesPage() {
 
     // Helper to generate a rendered certificate canvas directly to native Blob
     const renderSingleCertificateBlob = async (
-        participant: ParticipantRecord, 
-        tierId: string, 
-        format: 'png' | 'jpeg' = 'png', 
+        participant: ParticipantRecord,
+        tierId: string,
+        format: 'png' | 'jpeg' = 'png',
         quality = 0.95,
         customLayout?: LayoutConfig
     ): Promise<{ blob: Blob; width: number; height: number }> => {
@@ -2462,24 +2399,47 @@ export default function OrganizerCertificatesPage() {
                     </div>
                 </div>
 
-                <div className="flex items-center gap-3">
-                    <button
-                        onClick={() => setActiveTab('studio')}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                            activeTab === 'studio'
+                <div className="flex flex-wrap items-center gap-2.5">
+                    <div className="flex items-center gap-1.5 bg-gray-100 p-1 rounded-2xl border border-gray-200/80">
+                        <button
+                            type="button"
+                            onClick={switchToDbMode}
+                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${activeTab === 'studio' && dataSource === 'db'
                                 ? 'bg-slate-900 text-white shadow-md'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                    >
-                        Generator Studio
-                    </button>
-                    <button
-                        onClick={() => { setActiveTab('history'); fetchIssuedCertificates() }}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                            activeTab === 'history'
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
+                                }`}
+                        >
+                            <Database size={14} />
+                            <span>Generate Certificates from DB</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={switchToExcelMode}
+                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${activeTab === 'studio' && dataSource === 'excel'
                                 ? 'bg-slate-900 text-white shadow-md'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
+                                }`}
+                        >
+                            <FileSpreadsheet size={14} />
+                            <span>Generate Certificates from Excel Sheet</span>
+                        </button>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (activeTab === 'history') {
+                                setActiveTab('studio')
+                            } else {
+                                setActiveTab('history')
+                                fetchIssuedCertificates()
+                            }
+                        }}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${activeTab === 'history'
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-md'
+                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'
+                            }`}
+                        title="View previously issued certificates"
                     >
                         <span>Issued Registry</span>
                         <span className="bg-emerald-500/20 text-emerald-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
@@ -2491,11 +2451,10 @@ export default function OrganizerCertificatesPage() {
 
             {/* Notification Toast */}
             {toast && (
-                <div className={`p-4 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
-                    toast.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
+                <div className={`p-4 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${toast.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
                     toast.type === 'error' ? 'bg-rose-50 text-rose-800 border border-rose-200' :
-                    'bg-sky-50 text-sky-800 border border-sky-200'
-                }`}>
+                        'bg-sky-50 text-sky-800 border border-sky-200'
+                    }`}>
                     <div className="flex items-center gap-2">
                         {toast.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
                         <span>{toast.message}</span>
@@ -2541,11 +2500,10 @@ export default function OrganizerCertificatesPage() {
                                         key={tier.id}
                                         type="button"
                                         onClick={() => handleSwitchCertType(tier.id)}
-                                        className={`relative p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2.5 group cursor-pointer ${
-                                            isSelected
-                                                ? 'bg-white/10 border-amber-400 shadow-lg shadow-amber-500/10 ring-2 ring-amber-400/40'
-                                                : 'bg-slate-800/60 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
-                                        }`}
+                                        className={`relative p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2.5 group cursor-pointer ${isSelected
+                                            ? 'bg-white/10 border-amber-400 shadow-lg shadow-amber-500/10 ring-2 ring-amber-400/40'
+                                            : 'bg-slate-800/60 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
+                                            }`}
                                     >
                                         <div className="flex items-center justify-between">
                                             <span className="text-xl">{tier.icon}</span>
@@ -2600,11 +2558,10 @@ export default function OrganizerCertificatesPage() {
                                             key={cnt}
                                             type="button"
                                             onClick={() => handleWinnerCountChange(cnt)}
-                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                                winnerCount === cnt
-                                                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
-                                                    : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-100'
-                                            }`}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${winnerCount === cnt
+                                                ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                                                : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-100'
+                                                }`}
                                         >
                                             Top {cnt}
                                         </button>
@@ -2650,11 +2607,10 @@ export default function OrganizerCertificatesPage() {
                                 return (
                                     <div
                                         key={rank}
-                                        className={`rounded-xl border p-4 transition-all flex flex-col justify-between gap-3 ${
-                                            assignedTeam
-                                                ? 'bg-slate-900 text-white border-slate-700 shadow-md'
-                                                : 'bg-slate-50/70 border-dashed border-gray-300 text-gray-800'
-                                        }`}
+                                        className={`rounded-xl border p-4 transition-all flex flex-col justify-between gap-3 ${assignedTeam
+                                            ? 'bg-slate-900 text-white border-slate-700 shadow-md'
+                                            : 'bg-slate-50/70 border-dashed border-gray-300 text-gray-800'
+                                            }`}
                                     >
                                         <div>
                                             <div className="flex items-center justify-between mb-2">
@@ -2681,11 +2637,10 @@ export default function OrganizerCertificatesPage() {
                                                 <select
                                                     value={assignedTeam}
                                                     onChange={(e) => updateWinningTeam(rankIdx, e.target.value)}
-                                                    className={`w-full text-xs font-semibold rounded-lg px-3 py-2 border transition-all cursor-pointer ${
-                                                        assignedTeam
-                                                            ? 'bg-slate-800 text-white border-slate-600 focus:ring-2 focus:ring-amber-400'
-                                                            : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-emerald-500'
-                                                    }`}
+                                                    className={`w-full text-xs font-semibold rounded-lg px-3 py-2 border transition-all cursor-pointer ${assignedTeam
+                                                        ? 'bg-slate-800 text-white border-slate-600 focus:ring-2 focus:ring-amber-400'
+                                                        : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-emerald-500'
+                                                        }`}
                                                 >
                                                     <option value="">-- Choose Winning Team --</option>
                                                     {uniqueTeams.map(t => {
@@ -2735,13 +2690,12 @@ export default function OrganizerCertificatesPage() {
                                             <button
                                                 type="button"
                                                 onClick={() => handleSwitchCertType(tierInfo.id)}
-                                                className={`text-[11px] font-bold px-2 py-1 rounded transition-colors flex items-center gap-1 cursor-pointer ${
-                                                    isCurrentlyActiveTier
-                                                        ? 'bg-amber-400 text-slate-950 font-black'
-                                                        : assignedTeam
-                                                            ? 'text-amber-300 hover:text-white bg-slate-800 hover:bg-slate-700'
-                                                            : 'text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100'
-                                                }`}
+                                                className={`text-[11px] font-bold px-2 py-1 rounded transition-colors flex items-center gap-1 cursor-pointer ${isCurrentlyActiveTier
+                                                    ? 'bg-amber-400 text-slate-950 font-black'
+                                                    : assignedTeam
+                                                        ? 'text-amber-300 hover:text-white bg-slate-800 hover:bg-slate-700'
+                                                        : 'text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100'
+                                                    }`}
                                             >
                                                 <span>🎨</span>
                                                 <span>{isCurrentlyActiveTier ? 'Active Template' : 'Edit Template'}</span>
@@ -2788,42 +2742,82 @@ export default function OrganizerCertificatesPage() {
                     <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm space-y-6">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
                             <div>
-                                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Step 1</span>
-                                <h2 className="text-base font-bold text-gray-900">Select Participant Data Source</h2>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                        Step 1
+                                    </span>
+                                    <span className="text-xs text-gray-400">
+                                        {dataSource === 'db' ? 'Platform Database' : 'Excel / CSV Spreadsheet'}
+                                    </span>
+                                </div>
+                                <h2 className="text-base font-bold text-gray-900 mt-1">
+                                    {dataSource === 'db' ? 'Participants from GDG-KARE Database' : 'Participants from Uploaded Excel / CSV Sheet'}
+                                </h2>
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                    {dataSource === 'db'
+                                        ? 'Loaded directly from official platform registrations & teams.'
+                                        : excelFileName
+                                            ? `File loaded: ${excelFileName} (${participants.length} students)`
+                                            : 'Upload an Excel (.xlsx, .xls, .csv) spreadsheet to issue custom certificates.'}
+                                </p>
                             </div>
 
                             <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => { setDataSource('db'); fetchDbParticipants() }}
-                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 border transition-all ${
-                                        dataSource === 'db'
-                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                                    }`}
-                                >
-                                    <Database size={14} />
-                                    <span>GDG-KARE Platform Database</span>
-                                </button>
-                                <button
-                                    onClick={() => excelInputRef.current?.click()}
-                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 border transition-all ${
-                                        dataSource === 'excel'
-                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                                    }`}
-                                >
-                                    <FileSpreadsheet size={14} />
-                                    <span>Upload Excel / CSV</span>
-                                </button>
-                                <input
-                                    ref={excelInputRef}
-                                    type="file"
-                                    accept=".xlsx, .xls, .csv"
-                                    onChange={handleExcelUpload}
-                                    className="hidden"
-                                />
+                                {dataSource === 'db' ? (
+                                    <button
+                                        type="button"
+                                        onClick={fetchDbParticipants}
+                                        disabled={loadingParticipants}
+                                        className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                                    >
+                                        <RefreshCw size={13} className={loadingParticipants ? 'animate-spin' : ''} />
+                                        <span>Reload Database</span>
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => excelInputRef.current?.click()}
+                                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                                    >
+                                        <Upload size={13} />
+                                        <span>{excelFileName ? 'Replace Excel File' : 'Upload Excel / CSV'}</span>
+                                    </button>
+                                )}
                             </div>
                         </div>
+
+                        {/* Excel File Input */}
+                        <input
+                            ref={excelInputRef}
+                            type="file"
+                            accept=".xlsx, .xls, .csv"
+                            onChange={handleExcelUpload}
+                            className="hidden"
+                        />
+
+                        {/* If Excel mode and no participants loaded yet, display prominent upload dropzone */}
+                        {dataSource === 'excel' && participants.length === 0 && (
+                            <div
+                                onClick={() => excelInputRef.current?.click()}
+                                className="border-2 border-dashed border-gray-300 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/40 rounded-2xl p-8 text-center cursor-pointer transition-all space-y-3"
+                            >
+                                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto font-bold">
+                                    <FileSpreadsheet size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-bold text-gray-900">Choose your Excel or CSV Spreadsheet</h3>
+                                    <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+                                        Columns supported: <strong>Name, Reg No, Department, Section, Year, Team Name, Category</strong>.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm pointer-events-none"
+                                >
+                                    Browse Spreadsheet File (.xlsx, .xls, .csv)
+                                </button>
+                            </div>
+                        )}
 
                         {/* Category & Team Filter & Selection Tools */}
                         <div className="flex flex-wrap items-center justify-between gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-gray-200">
@@ -2835,64 +2829,56 @@ export default function OrganizerCertificatesPage() {
                                 <button
                                     type="button"
                                     onClick={() => setCategoryFilter('All')}
-                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${
-                                        categoryFilter === 'All'
-                                            ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${categoryFilter === 'All'
+                                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     <span>All</span>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                                        categoryFilter === 'All' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
-                                    }`}>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${categoryFilter === 'All' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+                                        }`}>
                                         {participants.length}
                                     </span>
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setCategoryFilter('Group 3')}
-                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${
-                                        categoryFilter === 'Group 3'
-                                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${categoryFilter === 'Group 3'
+                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     <span>Group 3</span>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                                        categoryFilter === 'Group 3' ? 'bg-white/20 text-white' : 'bg-indigo-50 text-indigo-700'
-                                    }`}>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${categoryFilter === 'Group 3' ? 'bg-white/20 text-white' : 'bg-indigo-50 text-indigo-700'
+                                        }`}>
                                         {group3Count}
                                     </span>
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setCategoryFilter('EE Credit')}
-                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${
-                                        categoryFilter === 'EE Credit'
-                                            ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
-                                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${categoryFilter === 'EE Credit'
+                                        ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     <span>EE Credit</span>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                                        categoryFilter === 'EE Credit' ? 'bg-white/20 text-white' : 'bg-amber-50 text-amber-700'
-                                    }`}>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${categoryFilter === 'EE Credit' ? 'bg-white/20 text-white' : 'bg-amber-50 text-amber-700'
+                                        }`}>
                                         {eeCreditCount}
                                     </span>
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => setCategoryFilter('Not Eligible')}
-                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${
-                                        categoryFilter === 'Not Eligible'
-                                            ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-3 py-1 rounded-lg font-bold border transition-all flex items-center gap-1.5 ${categoryFilter === 'Not Eligible'
+                                        ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     <span>Not Eligible</span>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                                        categoryFilter === 'Not Eligible' ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-700'
-                                    }`}>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${categoryFilter === 'Not Eligible' ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-700'
+                                        }`}>
                                         {notEligibleCount}
                                     </span>
                                 </button>
@@ -2934,7 +2920,7 @@ export default function OrganizerCertificatesPage() {
                                     title="Save all assigned categories to database"
                                 >
                                     <CheckCircle2 size={13} className={savingCategories ? 'animate-spin' : ''} />
-                                    <span>{savingCategories ? 'Saving...' : 'Sync to DB'}</span>
+                                    <span>{savingCategories ? 'Saving...' : 'Save to DB'}</span>
                                 </button>
                                 <button
                                     type="button"
@@ -3011,11 +2997,10 @@ export default function OrganizerCertificatesPage() {
                                                         <select
                                                             value={p.category}
                                                             onChange={(e) => updateParticipantCategory(p.id, e.target.value)}
-                                                            className={`text-xs border rounded px-2 py-0.5 font-bold transition-colors ${
-                                                                p.category === 'EE Credit' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                                            className={`text-xs border rounded px-2 py-0.5 font-bold transition-colors ${p.category === 'EE Credit' ? 'bg-amber-50 text-amber-700 border-amber-200' :
                                                                 p.category === 'Not Eligible' ? 'bg-rose-50 text-rose-700 border-rose-200' :
-                                                                'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                                            }`}
+                                                                    'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                                                }`}
                                                         >
                                                             <option value="Group 3">Group 3</option>
                                                             <option value="EE Credit">EE Credit</option>
@@ -3023,11 +3008,10 @@ export default function OrganizerCertificatesPage() {
                                                         </select>
                                                     </td>
                                                     <td className="py-2 px-3">
-                                                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                                                            isWinner
-                                                                ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold shadow-sm'
-                                                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                                        }`}>
+                                                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${isWinner
+                                                            ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold shadow-sm'
+                                                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                            }`}>
                                                             <span>{isWinner ? '🏆' : '🎖️'}</span>
                                                             <span>{awardTier}</span>
                                                         </span>
@@ -3068,16 +3052,6 @@ export default function OrganizerCertificatesPage() {
                                 >
                                     Use Sample {selectedCertType.split(' ')[0]}
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={syncAllTemplatesToCloud}
-                                    disabled={syncingAllTemplates}
-                                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-                                    title="Synchronize all templates and coordinates from browser storage to Supabase Cloud DB for all organizers"
-                                >
-                                    <CloudUpload size={14} className={syncingAllTemplates ? 'animate-bounce' : ''} />
-                                    <span>{syncingAllTemplates ? 'Syncing Tiers...' : '☁️ Sync All Tiers to DB'}</span>
-                                </button>
                                 <input
                                     ref={fileInputRef}
                                     type="file"
@@ -3098,33 +3072,29 @@ export default function OrganizerCertificatesPage() {
                                 <span className="text-gray-500 font-medium mr-1 text-[11px]">Select:</span>
                                 <button
                                     onClick={() => setCalibrationTab('name')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
-                                        calibrationTab === 'name' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'name' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     Name
                                 </button>
                                 <button
                                     onClick={() => setCalibrationTab('regNo')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
-                                        calibrationTab === 'regNo' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'regNo' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     Reg No
                                 </button>
                                 <button
                                     onClick={() => setCalibrationTab('qrCode')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
-                                        calibrationTab === 'qrCode' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'qrCode' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     QR Code
                                 </button>
                                 <button
                                     onClick={() => setCalibrationTab('certId')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
-                                        calibrationTab === 'certId' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                    }`}
+                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'certId' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                        }`}
                                 >
                                     Cert ID
                                 </button>
@@ -3145,7 +3115,7 @@ export default function OrganizerCertificatesPage() {
                                         <span>Click & drag placeholders directly</span>
                                     </div>
                                 </div>
-                                
+
                                 <div className="w-full border border-slate-700/80 rounded-xl bg-slate-950 flex items-center justify-center p-2">
                                     <div
                                         ref={previewContainerRef}
@@ -3174,17 +3144,15 @@ export default function OrganizerCertificatesPage() {
                                                 fontWeight: layout.name.fontWeight,
                                                 fontFamily: layout.name.fontFamily
                                             }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${
-                                                calibrationTab === 'name'
-                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2.5 py-1 shadow-xl'
-                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2.5 py-1'
-                                            }`}
+                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'name'
+                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2.5 py-1 shadow-xl'
+                                                : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2.5 py-1'
+                                                }`}
                                         >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${
-                                                calibrationTab === 'name' || draggingElement === 'name'
-                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                            }`}>
+                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'name' || draggingElement === 'name'
+                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                }`}>
                                                 <Move size={10} />
                                                 <span>Participant Name</span>
                                                 {(draggingElement === 'name' || calibrationTab === 'name') && (
@@ -3210,17 +3178,15 @@ export default function OrganizerCertificatesPage() {
                                                 fontWeight: layout.regNo.fontWeight,
                                                 fontFamily: layout.regNo.fontFamily
                                             }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${
-                                                calibrationTab === 'regNo'
-                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
-                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
-                                            }`}
+                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'regNo'
+                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
+                                                : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
+                                                }`}
                                         >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${
-                                                calibrationTab === 'regNo' || draggingElement === 'regNo'
-                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                            }`}>
+                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'regNo' || draggingElement === 'regNo'
+                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                }`}>
                                                 <Move size={10} />
                                                 <span>Reg No</span>
                                                 {(draggingElement === 'regNo' || calibrationTab === 'regNo') && (
@@ -3246,17 +3212,15 @@ export default function OrganizerCertificatesPage() {
                                                 fontWeight: layout.certId.fontWeight,
                                                 fontFamily: layout.certId.fontFamily
                                             }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${
-                                                calibrationTab === 'certId'
-                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
-                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
-                                            }`}
+                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'certId'
+                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
+                                                : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
+                                                }`}
                                         >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${
-                                                calibrationTab === 'certId' || draggingElement === 'certId'
-                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                            }`}>
+                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'certId' || draggingElement === 'certId'
+                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                }`}>
                                                 <Move size={10} />
                                                 <span>Cert ID</span>
                                                 {(draggingElement === 'certId' || calibrationTab === 'certId') && (
@@ -3279,17 +3243,15 @@ export default function OrganizerCertificatesPage() {
                                                 width: `${layout.qrCode.size * previewScale}px`,
                                                 height: `${layout.qrCode.size * previewScale}px`
                                             }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none p-0.5 rounded ${
-                                                calibrationTab === 'qrCode'
-                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/30 shadow-2xl'
-                                                    : 'hover:ring-1 hover:ring-white/70'
-                                            }`}
+                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none p-0.5 rounded ${calibrationTab === 'qrCode'
+                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/30 shadow-2xl'
+                                                : 'hover:ring-1 hover:ring-white/70'
+                                                }`}
                                         >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${
-                                                calibrationTab === 'qrCode' || draggingElement === 'qrCode'
-                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                            }`}>
+                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'qrCode' || draggingElement === 'qrCode'
+                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                }`}>
                                                 <Move size={10} />
                                                 <span>QR Code</span>
                                                 {(draggingElement === 'qrCode' || calibrationTab === 'qrCode') && (
@@ -3614,26 +3576,16 @@ export default function OrganizerCertificatesPage() {
                                 )}
 
                                 {/* Calibration Save Buttons */}
-                                <div className="pt-3 border-t border-gray-200 flex flex-col sm:flex-row items-center gap-2.5">
+                                <div className="pt-3 border-t border-gray-200">
                                     <button
                                         type="button"
                                         onClick={saveLayoutConfig}
                                         disabled={savingTemplate}
-                                        className="w-full sm:flex-1 py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                                        className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                                         title={`Save ${selectedCertType} coordinates and template to Supabase Cloud DB`}
                                     >
                                         <CheckCircle2 size={15} className={savingTemplate ? 'animate-spin' : ''} />
                                         <span>{savingTemplate ? 'Saving Coordinates...' : `Save ${selectedCertType.split(' ')[0]} to Cloud DB`}</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={syncAllTemplatesToCloud}
-                                        disabled={syncingAllTemplates}
-                                        className="w-full sm:w-auto py-2.5 px-5 bg-black hover:bg-gray-900 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
-                                        title="Synchronize all templates and coordinates across all tiers to Supabase Cloud DB for all organizers"
-                                    >
-                                        <CloudUpload size={15} className={syncingAllTemplates ? 'animate-bounce' : ''} />
-                                        <span>{syncingAllTemplates ? 'Syncing...' : 'Push All Tiers to Cloud DB'}</span>
                                     </button>
                                 </div>
                             </div>
@@ -3642,7 +3594,7 @@ export default function OrganizerCertificatesPage() {
 
                     {/* STEP 3: CATEGORY DOWNLOAD & PREVIEW HUB */}
                     <div className="bg-white p-6 sm:p-7 rounded-2xl border border-gray-200 shadow-sm space-y-6">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-5">
+                        <div className="border-b border-gray-100 pb-5">
                             <div>
                                 <div className="flex items-center gap-2">
                                     <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
@@ -3657,17 +3609,6 @@ export default function OrganizerCertificatesPage() {
                                     Select any certificate category below (Participants, Winning Team 1, 2, 3...) to preview the rendered certificate or download the complete batch archive.
                                 </p>
                             </div>
-
-                            <button
-                                type="button"
-                                onClick={generateSmartAllCertificates}
-                                disabled={generating || participants.filter(p => p.selected).length === 0}
-                                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto"
-                                title="Pre-generate and synchronize all participant certificates with Supabase DB registry"
-                            >
-                                <RefreshCw size={14} className={generating ? 'animate-spin' : ''} />
-                                <span>{generating ? 'Syncing Records...' : '🔄 Sync All to DB Registry'}</span>
-                            </button>
                         </div>
 
                         {/* Category Selector Grid */}
@@ -3682,20 +3623,18 @@ export default function OrganizerCertificatesPage() {
                                         <div
                                             key={cat.id}
                                             onClick={() => setSelectedDownloadCategoryId(cat.id)}
-                                            className={`rounded-xl border p-3.5 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
-                                                isSelected
-                                                    ? 'bg-slate-900 text-white border-amber-400 ring-2 ring-amber-400/40 shadow-lg shadow-amber-500/10'
-                                                    : 'bg-slate-50 hover:bg-white border-gray-200 text-gray-800 hover:border-gray-300'
-                                            }`}
+                                            className={`rounded-xl border p-3.5 transition-all cursor-pointer flex flex-col justify-between gap-3 ${isSelected
+                                                ? 'bg-slate-900 text-white border-amber-400 ring-2 ring-amber-400/40 shadow-lg shadow-amber-500/10'
+                                                : 'bg-slate-50 hover:bg-white border-gray-200 text-gray-800 hover:border-gray-300'
+                                                }`}
                                         >
                                             <div>
                                                 <div className="flex items-center justify-between mb-1.5">
                                                     <span className="text-xl">{cat.icon}</span>
-                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                                        isSelected
-                                                            ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
-                                                            : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                                    }`}>
+                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isSelected
+                                                        ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                                                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                        }`}>
                                                         {cat.count} Student{cat.count === 1 ? '' : 's'}
                                                     </span>
                                                 </div>
@@ -3719,11 +3658,10 @@ export default function OrganizerCertificatesPage() {
                                                         e.stopPropagation()
                                                         openCategoryPreview(cat.id, 0)
                                                     }}
-                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
-                                                        isSelected
-                                                            ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-sm'
-                                                            : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-300'
-                                                    }`}
+                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${isSelected
+                                                        ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-sm'
+                                                        : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-300'
+                                                        }`}
                                                 >
                                                     <Eye size={12} />
                                                     <span>Preview</span>
@@ -3852,22 +3790,20 @@ export default function OrganizerCertificatesPage() {
                                                                 <td className="py-2 px-3 font-mono font-bold text-gray-700">{p.reg_no}</td>
                                                                 <td className="py-2 px-3 text-gray-600">{p.team_name || '—'}</td>
                                                                 <td className="py-2 px-3">
-                                                                    <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                                                                        p.category === 'EE Credit' ? 'bg-amber-100 text-amber-800' :
+                                                                    <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${p.category === 'EE Credit' ? 'bg-amber-100 text-amber-800' :
                                                                         p.category === 'Not Eligible' ? 'bg-rose-100 text-rose-800' :
-                                                                        'bg-indigo-100 text-indigo-800'
-                                                                    }`}>
+                                                                            'bg-indigo-100 text-indigo-800'
+                                                                        }`}>
                                                                         {p.category}
                                                                     </span>
                                                                 </td>
                                                                 <td className="py-2 px-3">
-                                                                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold border ${
-                                                                        pTier.includes('Winner 1') ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold' :
+                                                                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold border ${pTier.includes('Winner 1') ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold' :
                                                                         pTier.includes('Winner 2') ? 'bg-slate-200 text-slate-900 border-slate-300' :
-                                                                        pTier.includes('Winner 3') ? 'bg-orange-100 text-orange-900 border-orange-300' :
-                                                                        pTier.startsWith('Winner') ? 'bg-indigo-100 text-indigo-900 border-indigo-300' :
-                                                                        'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                                                    }`}>
+                                                                            pTier.includes('Winner 3') ? 'bg-orange-100 text-orange-900 border-orange-300' :
+                                                                                pTier.startsWith('Winner') ? 'bg-indigo-100 text-indigo-900 border-indigo-300' :
+                                                                                    'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                                        }`}>
                                                                         <span>{pTier.startsWith('Winner') ? '🏆' : '🎖️'}</span>
                                                                         <span>{pTier}</span>
                                                                     </span>
@@ -3993,27 +3929,25 @@ export default function OrganizerCertificatesPage() {
                                                 <td className="py-3 px-4 font-mono text-gray-700">{c.reg_no}</td>
                                                 <td className="py-3 px-4 text-gray-600">{c.dept || 'Engineering'} • {c.year}</td>
                                                 <td className="py-3 px-4">
-                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                                        c.category === 'EE Credit' ? 'bg-amber-100 text-amber-800' :
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${c.category === 'EE Credit' ? 'bg-amber-100 text-amber-800' :
                                                         c.category === 'Not Eligible' ? 'bg-rose-100 text-rose-800' :
-                                                        'bg-indigo-100 text-indigo-800'
-                                                    }`}>
+                                                            'bg-indigo-100 text-indigo-800'
+                                                        }`}>
                                                         {c.category || 'Group 3'}
                                                     </span>
                                                 </td>
                                                 <td className="py-3 px-4">
-                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                                        c.template_name?.includes('Winner 1') ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${c.template_name?.includes('Winner 1') ? 'bg-amber-100 text-amber-800 border-amber-300' :
                                                         c.template_name?.includes('Winner 2') ? 'bg-slate-200 text-slate-800 border-slate-300' :
-                                                        c.template_name?.includes('Winner 3') ? 'bg-orange-100 text-orange-800 border-orange-300' :
-                                                        c.template_name?.includes('Special') ? 'bg-purple-100 text-purple-800 border-purple-300' :
-                                                        'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                                    }`}>
+                                                            c.template_name?.includes('Winner 3') ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                                                                c.template_name?.includes('Special') ? 'bg-purple-100 text-purple-800 border-purple-300' :
+                                                                    'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                        }`}>
                                                         {c.template_name?.includes('Winner 1') ? '🥇 1st Place' :
-                                                         c.template_name?.includes('Winner 2') ? '🥈 2nd Place' :
-                                                         c.template_name?.includes('Winner 3') ? '🥉 3rd Place' :
-                                                         c.template_name?.includes('Special') ? '⭐ Special' :
-                                                         '🎖️ Participation'}
+                                                            c.template_name?.includes('Winner 2') ? '🥈 2nd Place' :
+                                                                c.template_name?.includes('Winner 3') ? '🥉 3rd Place' :
+                                                                    c.template_name?.includes('Special') ? '⭐ Special' :
+                                                                        '🎖️ Participation'}
                                                     </span>
                                                 </td>
                                                 <td className="py-3 px-4 text-gray-500 text-[11px]">
@@ -4075,11 +4009,10 @@ export default function OrganizerCertificatesPage() {
                                     <button
                                         type="button"
                                         onClick={() => setShowPreviewTuner(!showPreviewTuner)}
-                                        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
-                                            showPreviewTuner
-                                                ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20 ring-2 ring-amber-400/40'
-                                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 hover:border-slate-600'
-                                        }`}
+                                        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${showPreviewTuner
+                                            ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/20 ring-2 ring-amber-400/40'
+                                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 hover:border-slate-600'
+                                            }`}
                                         title="Adjust font size and coordinates live on certificate"
                                     >
                                         <Sliders size={14} className={showPreviewTuner ? 'text-slate-950' : 'text-amber-400'} />
@@ -4107,17 +4040,15 @@ export default function OrganizerCertificatesPage() {
                                             key={cat.id}
                                             type="button"
                                             onClick={() => openCategoryPreview(cat.id, 0)}
-                                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
-                                                isCurrent
-                                                    ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
-                                                    : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
-                                            }`}
+                                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${isCurrent
+                                                ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                                                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
+                                                }`}
                                         >
                                             <span>{cat.icon}</span>
                                             <span>{cat.shortName}</span>
-                                            <span className={`text-[10px] px-1 py-0.2 rounded font-semibold ${
-                                                isCurrent ? 'bg-black/20 text-slate-900' : 'bg-slate-900/60 text-slate-400'
-                                            }`}>
+                                            <span className={`text-[10px] px-1 py-0.2 rounded font-semibold ${isCurrent ? 'bg-black/20 text-slate-900' : 'bg-slate-900/60 text-slate-400'
+                                                }`}>
                                                 {cat.count}
                                             </span>
                                         </button>
@@ -4145,11 +4076,10 @@ export default function OrganizerCertificatesPage() {
                                     const studentTier = previewModal.activeTier || getParticipantAwardTier(previewModal.previewParticipant)
                                     const isWinner = studentTier.includes('Winner') || studentTier.includes('1st') || studentTier.includes('2nd') || studentTier.includes('3rd')
                                     return (
-                                        <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
-                                            isWinner
-                                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm shadow-amber-500/10'
-                                                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                                        }`}>
+                                        <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${isWinner
+                                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm shadow-amber-500/10'
+                                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                            }`}>
                                             <span>{isWinner ? '🏆' : '🎖️'}</span>
                                             <span>{studentTier}</span>
                                         </span>
@@ -4251,11 +4181,10 @@ export default function OrganizerCertificatesPage() {
                                                     key={tab}
                                                     type="button"
                                                     onClick={() => setPreviewTunerTab(tab)}
-                                                    className={`py-1.5 rounded-lg font-bold text-[11px] transition-all cursor-pointer ${
-                                                        isActive
-                                                            ? 'bg-amber-400 text-slate-950 shadow-sm'
-                                                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                                                    }`}
+                                                    className={`py-1.5 rounded-lg font-bold text-[11px] transition-all cursor-pointer ${isActive
+                                                        ? 'bg-amber-400 text-slate-950 shadow-sm'
+                                                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                                        }`}
                                                 >
                                                     {labels[tab]}
                                                 </button>
@@ -4451,9 +4380,8 @@ export default function OrganizerCertificatesPage() {
                                                                     key={al}
                                                                     type="button"
                                                                     onClick={() => handleUpdatePreviewLayout(prev => ({ ...prev, name: { ...prev.name, align: al } }))}
-                                                                    className={`flex-1 py-1 rounded text-[10px] font-bold capitalize cursor-pointer ${
-                                                                        previewLayout.name.align === al ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-400 hover:text-white'
-                                                                    }`}
+                                                                    className={`flex-1 py-1 rounded text-[10px] font-bold capitalize cursor-pointer ${previewLayout.name.align === al ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-400 hover:text-white'
+                                                                        }`}
                                                                 >
                                                                     {al}
                                                                 </button>
@@ -4671,11 +4599,10 @@ export default function OrganizerCertificatesPage() {
                                             type="button"
                                             onClick={handleSavePreviewLayout}
                                             disabled={savingPreviewTuner}
-                                            className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
-                                                previewTunerSavedSuccess
-                                                    ? 'bg-blue-700 text-white'
-                                                    : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                            }`}
+                                            className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${previewTunerSavedSuccess
+                                                ? 'bg-blue-700 text-white'
+                                                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                                }`}
                                         >
                                             {savingPreviewTuner ? (
                                                 <>
