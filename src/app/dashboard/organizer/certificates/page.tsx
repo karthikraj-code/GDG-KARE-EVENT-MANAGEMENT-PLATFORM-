@@ -33,6 +33,7 @@ import {
     Trophy,
     X,
     Save,
+    Plus,
     ChevronLeft,
     ChevronRight
 } from 'lucide-react'
@@ -190,6 +191,7 @@ export interface PreviewModalData {
 
 interface LayoutConfig {
     name: {
+        enabled?: boolean
         x: number
         y: number
         fontSize: number
@@ -200,6 +202,7 @@ interface LayoutConfig {
         maxWidth?: number
     }
     regNo: {
+        enabled?: boolean
         x: number
         y: number
         fontSize: number
@@ -210,6 +213,7 @@ interface LayoutConfig {
         maxWidth?: number
     }
     certId: {
+        enabled?: boolean
         x: number
         y: number
         fontSize: number
@@ -219,16 +223,69 @@ interface LayoutConfig {
         fontFamily: string
     }
     qrCode: {
+        enabled?: boolean
         x: number
         y: number
         size: number
         darkColor: string
         lightColor: string
     }
+    credit?: {
+        enabled?: boolean
+        x: number
+        y: number
+        fontSize: number
+        fontWeight: string
+        color: string
+        align: CanvasTextAlign
+        fontFamily: string
+        prefix: string
+        text2ndYear: string
+        text3rd4thYear: string
+        maxWidth?: number
+    }
+}
+
+export const DEFAULT_CREDIT_LAYOUT = {
+    enabled: true,
+    x: 960,
+    y: 770,
+    fontSize: 22,
+    fontWeight: '600',
+    color: '#475569',
+    align: 'center' as CanvasTextAlign,
+    fontFamily: 'Inter, sans-serif',
+    prefix: '',
+    text2ndYear: 'Non CGPA - Group 3',
+    text3rd4thYear: '2 EE credit',
+    maxWidth: 3800
+}
+
+export const getParticipantCreditText = (
+    p?: ParticipantRecord | null,
+    creditLayout?: {
+        text2ndYear?: string
+        text3rd4thYear?: string
+        prefix?: string
+    }
+): string => {
+    if (!p) return ''
+    if (p.category === 'Not Eligible') return ''
+
+    const text2nd = creditLayout?.text2ndYear || 'Non CGPA - Group 3'
+    const text3rd4th = creditLayout?.text3rd4thYear || '2 EE credit'
+    const prefix = creditLayout?.prefix || ''
+
+    const yearStr = String(p.year || '').toLowerCase().trim()
+    const is2ndYear = yearStr.includes('2nd') || yearStr.includes('second') || /^2(\s|$|nd)/.test(yearStr) || p.category === 'Group 3'
+
+    const chosen = is2ndYear ? text2nd : text3rd4th
+    return prefix ? `${prefix}${chosen}` : chosen
 }
 
 const DEFAULT_LAYOUT: LayoutConfig = {
     name: {
+        enabled: true,
         x: 960,
         y: 620,
         fontSize: 54,
@@ -239,6 +296,7 @@ const DEFAULT_LAYOUT: LayoutConfig = {
         maxWidth: 3800
     },
     regNo: {
+        enabled: true,
         x: 960,
         y: 710,
         fontSize: 26,
@@ -248,6 +306,7 @@ const DEFAULT_LAYOUT: LayoutConfig = {
         fontFamily: 'Inter, sans-serif'
     },
     certId: {
+        enabled: true,
         x: 1650,
         y: 1020,
         fontSize: 16,
@@ -257,12 +316,14 @@ const DEFAULT_LAYOUT: LayoutConfig = {
         fontFamily: 'monospace'
     },
     qrCode: {
+        enabled: true,
         x: 1570,
         y: 840,
         size: 150,
         darkColor: '#000000',
         lightColor: '#ffffff'
-    }
+    },
+    credit: DEFAULT_CREDIT_LAYOUT
 }
 
 // Native Browser IndexedDB Store (bypasses 5MB localStorage limit so high-res templates persist permanently)
@@ -544,8 +605,8 @@ export default function OrganizerCertificatesPage() {
 
     // Layout calibration
     const [layout, setLayout] = useState<LayoutConfig>(DEFAULT_LAYOUT)
-    const [activeElementToPosition, setActiveElementToPosition] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | null>(null)
-    const [calibrationTab, setCalibrationTab] = useState<'name' | 'regNo' | 'certId' | 'qrCode'>('name')
+    const [activeElementToPosition, setActiveElementToPosition] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | 'credit' | null>(null)
+    const [calibrationTab, setCalibrationTab] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | 'credit'>('name')
 
     // Generation state
     const [generating, setGenerating] = useState(false)
@@ -564,7 +625,7 @@ export default function OrganizerCertificatesPage() {
     // Draggable Overlay & Real-time scaling
     const previewContainerRef = useRef<HTMLDivElement>(null)
     const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 960, height: 540 })
-    const [draggingElement, setDraggingElement] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | null>(null)
+    const [draggingElement, setDraggingElement] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | 'credit' | null>(null)
     const [dragStartPos, setDragStartPos] = useState<{ mouseX: number; mouseY: number; initialX: number; initialY: number } | null>(null)
     const [sampleQrDataUrl, setSampleQrDataUrl] = useState<string>('')
 
@@ -627,14 +688,17 @@ export default function OrganizerCertificatesPage() {
             const newX = Math.round(Math.max(0, Math.min(nativeW, dragStartPos.initialX + dxNative)))
             const newY = Math.round(Math.max(0, Math.min(nativeH, dragStartPos.initialY + dyNative)))
 
-            setLayout(prev => ({
-                ...prev,
-                [draggingElement]: {
-                    ...prev[draggingElement],
-                    x: newX,
-                    y: newY
+            setLayout(prev => {
+                const cur = prev[draggingElement] || (draggingElement === 'credit' ? DEFAULT_CREDIT_LAYOUT : {})
+                return {
+                    ...prev,
+                    [draggingElement]: {
+                        ...cur,
+                        x: newX,
+                        y: newY
+                    }
                 }
-            }))
+            })
         }
 
         const handlePointerUp = () => {
@@ -655,7 +719,7 @@ export default function OrganizerCertificatesPage() {
         }
     }, [draggingElement, dragStartPos, templateDimensions])
 
-    const startDrag = (element: 'name' | 'regNo' | 'certId' | 'qrCode', e: React.MouseEvent | React.TouchEvent) => {
+    const startDrag = (element: 'name' | 'regNo' | 'certId' | 'qrCode' | 'credit', e: React.MouseEvent | React.TouchEvent) => {
         e.stopPropagation()
         e.preventDefault()
         setCalibrationTab(element)
@@ -664,11 +728,13 @@ export default function OrganizerCertificatesPage() {
         const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX
         const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY
 
+        const elemLayout = layout[element] || (element === 'credit' ? DEFAULT_CREDIT_LAYOUT : { x: 0, y: 0 })
+
         setDragStartPos({
             mouseX: clientX,
             mouseY: clientY,
-            initialX: layout[element].x,
-            initialY: layout[element].y
+            initialX: elemLayout.x,
+            initialY: elemLayout.y
         })
     }
 
@@ -721,7 +787,7 @@ export default function OrganizerCertificatesPage() {
     const [previewModal, setPreviewModal] = useState<PreviewModalData | null>(null)
     const [generatingPreview, setGeneratingPreview] = useState(false)
     const [showPreviewTuner, setShowPreviewTuner] = useState<boolean>(false)
-    const [previewTunerTab, setPreviewTunerTab] = useState<'name' | 'regNo' | 'certId' | 'qrCode'>('name')
+    const [previewTunerTab, setPreviewTunerTab] = useState<'name' | 'regNo' | 'credit' | 'certId' | 'qrCode'>('name')
     const [previewLayout, setPreviewLayout] = useState<LayoutConfig>(DEFAULT_LAYOUT)
     const [savingPreviewTuner, setSavingPreviewTuner] = useState<boolean>(false)
     const [previewTunerSavedSuccess, setPreviewTunerSavedSuccess] = useState<boolean>(false)
@@ -1361,6 +1427,8 @@ export default function OrganizerCertificatesPage() {
                 updated.name = { ...updated.name, x: clickX, y: clickY }
             } else if (activeElementToPosition === 'regNo') {
                 updated.regNo = { ...updated.regNo, x: clickX, y: clickY }
+            } else if (activeElementToPosition === 'credit') {
+                updated.credit = { ...DEFAULT_CREDIT_LAYOUT, ...(updated.credit || {}), x: clickX, y: clickY }
             } else if (activeElementToPosition === 'certId') {
                 updated.certId = { ...updated.certId, x: clickX, y: clickY }
             } else if (activeElementToPosition === 'qrCode') {
@@ -1432,6 +1500,7 @@ export default function OrganizerCertificatesPage() {
                     `🆔 Registration No: X: ${layout.regNo.x}, Y: ${layout.regNo.y} (${layout.regNo.fontSize}px, prefix: "${layout.regNo.prefix}")`,
                     `🔖 Certificate ID: X: ${layout.certId.x}, Y: ${layout.certId.y} (${layout.certId.fontSize}px, prefix: "${layout.certId.prefix}")`,
                     `📱 Scannable QR Code: X: ${layout.qrCode.x}, Y: ${layout.qrCode.y} (Size: ${layout.qrCode.size}px)`,
+                    `🎓 Academic Credit / Track: ${(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? `X: ${layout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x}, Y: ${layout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y} ("${layout.credit?.text2ndYear || 'Non CGPA - Group 3'}" / "${layout.credit?.text3rd4thYear || '2 EE credit'}")` : 'Removed / Hidden'}`,
                     `☁️ Production Cloud Sync: ${cloudSynced ? 'Saved in Supabase Cloud database. All organizers on production/other devices will see these coordinates!' : 'Cached locally & queued for cloud sync.'}`,
                     `👥 Multi-Organizer Support: Other organizers opening this event will automatically inherit these calibrated coordinates.`
                 ],
@@ -1578,41 +1647,62 @@ export default function OrganizerCertificatesPage() {
                 ctx.drawImage(templateImage, 0, 0, width, height)
 
                 // 2. Draw Name
-                ctx.font = `${layout.name.fontWeight} ${layout.name.fontSize}px ${layout.name.fontFamily}`
-                ctx.fillStyle = layout.name.color
-                ctx.textAlign = layout.name.align
-                ctx.fillText(p.name, layout.name.x, layout.name.y)
+                if (layout.name.enabled !== false) {
+                    ctx.font = `${layout.name.fontWeight} ${layout.name.fontSize}px ${layout.name.fontFamily}`
+                    ctx.fillStyle = layout.name.color
+                    ctx.textAlign = layout.name.align
+                    ctx.fillText(p.name, layout.name.x, layout.name.y)
+                }
 
                 // 3. Draw Reg No
-                ctx.font = `${layout.regNo.fontWeight} ${layout.regNo.fontSize}px ${layout.regNo.fontFamily}`
-                ctx.fillStyle = layout.regNo.color
-                ctx.textAlign = 'center'
-                ctx.fillText(`${layout.regNo.prefix}${p.reg_no}`, layout.regNo.x, layout.regNo.y)
+                if (layout.regNo.enabled !== false) {
+                    ctx.font = `${layout.regNo.fontWeight} ${layout.regNo.fontSize}px ${layout.regNo.fontFamily}`
+                    ctx.fillStyle = layout.regNo.color
+                    ctx.textAlign = 'center'
+                    ctx.fillText(`${layout.regNo.prefix}${p.reg_no}`, layout.regNo.x, layout.regNo.y)
+                }
+
+                // 3.5 Draw Academic Credit / Category Text
+                const creditLayout = { ...DEFAULT_CREDIT_LAYOUT, ...(layout.credit || {}) }
+                if (creditLayout.enabled !== false) {
+                    const creditText = getParticipantCreditText(p, creditLayout)
+                    if (creditText) {
+                        ctx.font = `${creditLayout.fontWeight} ${creditLayout.fontSize}px ${creditLayout.fontFamily}`
+                        ctx.fillStyle = creditLayout.color
+                        ctx.textAlign = creditLayout.align
+                        ctx.fillText(creditText, creditLayout.x, creditLayout.y)
+                    }
+                }
 
                 // 4. Draw Unique Cert ID
-                ctx.font = `${layout.certId.fontWeight} ${layout.certId.fontSize}px ${layout.certId.fontFamily}`
-                ctx.fillStyle = layout.certId.color
-                ctx.textAlign = 'center'
-                ctx.fillText(`${layout.certId.prefix}${certCode}`, layout.certId.x, layout.certId.y)
+                if (layout.certId.enabled !== false) {
+                    ctx.font = `${layout.certId.fontWeight} ${layout.certId.fontSize}px ${layout.certId.fontFamily}`
+                    ctx.fillStyle = layout.certId.color
+                    ctx.textAlign = 'center'
+                    ctx.fillText(`${layout.certId.prefix}${certCode}`, layout.certId.x, layout.certId.y)
+                }
 
                 // 5. Draw QR Code
-                const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
-                    width: layout.qrCode.size,
-                    margin: 1,
-                    color: {
-                        dark: layout.qrCode.darkColor || '#000000',
-                        light: layout.qrCode.lightColor || '#ffffff'
-                    }
-                })
+                if (layout.qrCode.enabled !== false) {
+                    const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
+                        width: layout.qrCode.size,
+                        margin: 1,
+                        color: {
+                            dark: layout.qrCode.darkColor || '#000000',
+                            light: layout.qrCode.lightColor || '#ffffff'
+                        }
+                    })
 
-                await new Promise<void>((resolve) => {
-                    const qrImg = new Image()
-                    qrImg.onload = () => {
-                        ctx.drawImage(qrImg, layout.qrCode.x, layout.qrCode.y, layout.qrCode.size, layout.qrCode.size)
-                        resolve()
-                    }
-                    qrImg.src = qrDataUrl
-                })
+                    await new Promise<void>((resolve) => {
+                        const qrImg = new Image()
+                        qrImg.onload = () => {
+                            ctx.drawImage(qrImg, layout.qrCode.x, layout.qrCode.y, layout.qrCode.size, layout.qrCode.size)
+                            resolve()
+                        }
+                        qrImg.onerror = () => resolve()
+                        qrImg.src = qrDataUrl
+                    })
+                }
 
                 const dataUrl = offscreenCanvas.toDataURL('image/png', 0.95)
                 results.push({
@@ -1846,42 +1936,62 @@ export default function OrganizerCertificatesPage() {
                 ctx.drawImage(asset.img, 0, 0, asset.width, asset.height)
 
                 // 2. Name with smart dynamic auto-fitting
-                let actualNameFontSize = tLayout.name.fontSize
-                ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
-                const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
-                const measuredNameWidth = ctx.measureText(p.name).width
-                if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
-                    const scaleFactor = maxAllowedNameWidth / measuredNameWidth
-                    actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
+                if (tLayout.name.enabled !== false) {
+                    let actualNameFontSize = tLayout.name.fontSize
                     ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+                    const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
+                    const measuredNameWidth = ctx.measureText(p.name).width
+                    if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
+                        const scaleFactor = maxAllowedNameWidth / measuredNameWidth
+                        actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
+                        ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+                    }
+                    ctx.fillStyle = tLayout.name.color
+                    ctx.textAlign = tLayout.name.align
+                    ctx.fillText(p.name, tLayout.name.x, tLayout.name.y)
                 }
-                ctx.fillStyle = tLayout.name.color
-                ctx.textAlign = tLayout.name.align
-                ctx.fillText(p.name, tLayout.name.x, tLayout.name.y)
 
                 // 3. Reg No
-                ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
-                ctx.fillStyle = tLayout.regNo.color
-                ctx.textAlign = 'center'
-                ctx.fillText(`${tLayout.regNo.prefix}${p.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
+                if (tLayout.regNo.enabled !== false) {
+                    ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
+                    ctx.fillStyle = tLayout.regNo.color
+                    ctx.textAlign = 'center'
+                    ctx.fillText(`${tLayout.regNo.prefix}${p.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
+                }
+
+                // 3.5 Academic Credit / Category Text
+                const creditLayout = { ...DEFAULT_CREDIT_LAYOUT, ...(tLayout.credit || {}) }
+                if (creditLayout.enabled !== false) {
+                    const creditText = getParticipantCreditText(p, creditLayout)
+                    if (creditText) {
+                        ctx.font = `${creditLayout.fontWeight} ${creditLayout.fontSize}px ${creditLayout.fontFamily}`
+                        ctx.fillStyle = creditLayout.color
+                        ctx.textAlign = creditLayout.align
+                        ctx.fillText(creditText, creditLayout.x, creditLayout.y)
+                    }
+                }
 
                 // 4. Cert ID
-                ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
-                ctx.fillStyle = tLayout.certId.color
-                ctx.textAlign = 'center'
-                ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
+                if (tLayout.certId.enabled !== false) {
+                    ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
+                    ctx.fillStyle = tLayout.certId.color
+                    ctx.textAlign = 'center'
+                    ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
+                }
 
                 // 5. QR Code - DIRECT TO CANVAS (Super-fast, no base64 string, no image onload!)
-                const qrCanvas = document.createElement('canvas')
-                await QRCode.toCanvas(qrCanvas, verifyUrl, {
-                    width: tLayout.qrCode.size,
-                    margin: 1,
-                    color: {
-                        dark: tLayout.qrCode.darkColor || '#000000',
-                        light: tLayout.qrCode.lightColor || '#ffffff'
-                    }
-                })
-                ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+                if (tLayout.qrCode.enabled !== false) {
+                    const qrCanvas = document.createElement('canvas')
+                    await QRCode.toCanvas(qrCanvas, verifyUrl, {
+                        width: tLayout.qrCode.size,
+                        margin: 1,
+                        color: {
+                            dark: tLayout.qrCode.darkColor || '#000000',
+                            light: tLayout.qrCode.lightColor || '#ffffff'
+                        }
+                    })
+                    ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+                }
 
                 // Lightweight JPEG dataURL for instant state storage without RAM bloat
                 const dataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.88)
@@ -2037,42 +2147,62 @@ export default function OrganizerCertificatesPage() {
         ctx.drawImage(asset.img, 0, 0, asset.width, asset.height)
 
         // 2. Name with smart dynamic auto-fitting to prevent overflowing placeholder lines
-        let actualNameFontSize = tLayout.name.fontSize
-        ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
-        const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
-        const measuredNameWidth = ctx.measureText(participant.name).width
-        if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
-            const scaleFactor = maxAllowedNameWidth / measuredNameWidth
-            actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
+        if (tLayout.name.enabled !== false) {
+            let actualNameFontSize = tLayout.name.fontSize
             ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+            const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
+            const measuredNameWidth = ctx.measureText(participant.name).width
+            if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
+                const scaleFactor = maxAllowedNameWidth / measuredNameWidth
+                actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
+                ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+            }
+            ctx.fillStyle = tLayout.name.color
+            ctx.textAlign = tLayout.name.align
+            ctx.fillText(participant.name, tLayout.name.x, tLayout.name.y)
         }
-        ctx.fillStyle = tLayout.name.color
-        ctx.textAlign = tLayout.name.align
-        ctx.fillText(participant.name, tLayout.name.x, tLayout.name.y)
 
         // 3. Reg No
-        ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
-        ctx.fillStyle = tLayout.regNo.color
-        ctx.textAlign = 'center'
-        ctx.fillText(`${tLayout.regNo.prefix}${participant.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
+        if (tLayout.regNo.enabled !== false) {
+            ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
+            ctx.fillStyle = tLayout.regNo.color
+            ctx.textAlign = 'center'
+            ctx.fillText(`${tLayout.regNo.prefix}${participant.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
+        }
+
+        // 3.5 Academic Credit / Category Text
+        const creditLayoutDataUrl = { ...DEFAULT_CREDIT_LAYOUT, ...(tLayout.credit || {}) }
+        if (creditLayoutDataUrl.enabled !== false) {
+            const creditTextDataUrl = getParticipantCreditText(participant, creditLayoutDataUrl)
+            if (creditTextDataUrl) {
+                ctx.font = `${creditLayoutDataUrl.fontWeight} ${creditLayoutDataUrl.fontSize}px ${creditLayoutDataUrl.fontFamily}`
+                ctx.fillStyle = creditLayoutDataUrl.color
+                ctx.textAlign = creditLayoutDataUrl.align
+                ctx.fillText(creditTextDataUrl, creditLayoutDataUrl.x, creditLayoutDataUrl.y)
+            }
+        }
 
         // 4. Cert ID
-        ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
-        ctx.fillStyle = tLayout.certId.color
-        ctx.textAlign = 'center'
-        ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
+        if (tLayout.certId.enabled !== false) {
+            ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
+            ctx.fillStyle = tLayout.certId.color
+            ctx.textAlign = 'center'
+            ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
+        }
 
         // 5. QR Code directly via QRCode.toCanvas (No slow base64 Image onload delays!)
-        const qrCanvas = document.createElement('canvas')
-        await QRCode.toCanvas(qrCanvas, verifyUrl, {
-            width: tLayout.qrCode.size,
-            margin: 1,
-            color: {
-                dark: tLayout.qrCode.darkColor || '#000000',
-                light: tLayout.qrCode.lightColor || '#ffffff'
-            }
-        })
-        ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+        if (tLayout.qrCode.enabled !== false) {
+            const qrCanvas = document.createElement('canvas')
+            await QRCode.toCanvas(qrCanvas, verifyUrl, {
+                width: tLayout.qrCode.size,
+                margin: 1,
+                color: {
+                    dark: tLayout.qrCode.darkColor || '#000000',
+                    light: tLayout.qrCode.lightColor || '#ffffff'
+                }
+            })
+            ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+        }
 
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
         return canvas.toDataURL(mime, quality)
@@ -2129,42 +2259,62 @@ export default function OrganizerCertificatesPage() {
         ctx.drawImage(asset.img, 0, 0, asset.width, asset.height)
 
         // Name with smart dynamic auto-fitting
-        let actualNameFontSize = tLayout.name.fontSize
-        ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
-        const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
-        const measuredNameWidth = ctx.measureText(participant.name).width
-        if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
-            const scaleFactor = maxAllowedNameWidth / measuredNameWidth
-            actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
+        if (tLayout.name.enabled !== false) {
+            let actualNameFontSize = tLayout.name.fontSize
             ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+            const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
+            const measuredNameWidth = ctx.measureText(participant.name).width
+            if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
+                const scaleFactor = maxAllowedNameWidth / measuredNameWidth
+                actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
+                ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+            }
+            ctx.fillStyle = tLayout.name.color
+            ctx.textAlign = tLayout.name.align
+            ctx.fillText(participant.name, tLayout.name.x, tLayout.name.y)
         }
-        ctx.fillStyle = tLayout.name.color
-        ctx.textAlign = tLayout.name.align
-        ctx.fillText(participant.name, tLayout.name.x, tLayout.name.y)
 
         // Reg No
-        ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
-        ctx.fillStyle = tLayout.regNo.color
-        ctx.textAlign = 'center'
-        ctx.fillText(`${tLayout.regNo.prefix}${participant.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
+        if (tLayout.regNo.enabled !== false) {
+            ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
+            ctx.fillStyle = tLayout.regNo.color
+            ctx.textAlign = 'center'
+            ctx.fillText(`${tLayout.regNo.prefix}${participant.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
+        }
+
+        // Academic Credit / Category Text
+        const creditLayoutBlob = { ...DEFAULT_CREDIT_LAYOUT, ...(tLayout.credit || {}) }
+        if (creditLayoutBlob.enabled !== false) {
+            const creditTextBlob = getParticipantCreditText(participant, creditLayoutBlob)
+            if (creditTextBlob) {
+                ctx.font = `${creditLayoutBlob.fontWeight} ${creditLayoutBlob.fontSize}px ${creditLayoutBlob.fontFamily}`
+                ctx.fillStyle = creditLayoutBlob.color
+                ctx.textAlign = creditLayoutBlob.align
+                ctx.fillText(creditTextBlob, creditLayoutBlob.x, creditLayoutBlob.y)
+            }
+        }
 
         // Cert ID
-        ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
-        ctx.fillStyle = tLayout.certId.color
-        ctx.textAlign = 'center'
-        ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
+        if (tLayout.certId.enabled !== false) {
+            ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
+            ctx.fillStyle = tLayout.certId.color
+            ctx.textAlign = 'center'
+            ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
+        }
 
         // QR Code
-        const qrCanvas = document.createElement('canvas')
-        await QRCode.toCanvas(qrCanvas, verifyUrl, {
-            width: tLayout.qrCode.size,
-            margin: 1,
-            color: {
-                dark: tLayout.qrCode.darkColor || '#000000',
-                light: tLayout.qrCode.lightColor || '#ffffff'
-            }
-        })
-        ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+        if (tLayout.qrCode.enabled !== false) {
+            const qrCanvas = document.createElement('canvas')
+            await QRCode.toCanvas(qrCanvas, verifyUrl, {
+                width: tLayout.qrCode.size,
+                margin: 1,
+                color: {
+                    dark: tLayout.qrCode.darkColor || '#000000',
+                    light: tLayout.qrCode.lightColor || '#ffffff'
+                }
+            })
+            ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+        }
 
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
         const blob = await canvasToBlob(canvas, mime, quality)
@@ -3267,36 +3417,33 @@ export default function OrganizerCertificatesPage() {
                                 <Move size={16} className="text-emerald-600 animate-pulse" />
                                 <span><strong>Direct Drag & Drop Active:</strong> Click and drag any placeholder directly across your certificate! You can also fine-tune size, colors, and styling in the panel.</span>
                             </div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-gray-500 font-medium mr-1 text-[11px]">Select:</span>
-                                <button
-                                    onClick={() => setCalibrationTab('name')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'name' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                {[
+                                    { id: 'name', label: 'Name', enabled: layout.name?.enabled !== false },
+                                    { id: 'regNo', label: 'Reg No', enabled: layout.regNo?.enabled !== false },
+                                    { id: 'credit', label: 'Credit / Track', enabled: (layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false },
+                                    { id: 'qrCode', label: 'QR Code', enabled: layout.qrCode?.enabled !== false },
+                                    { id: 'certId', label: 'Cert ID', enabled: layout.certId?.enabled !== false }
+                                ].map(item => (
+                                    <button
+                                        key={item.id}
+                                        type="button"
+                                        onClick={() => setCalibrationTab(item.id as any)}
+                                        className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center gap-1.5 cursor-pointer ${
+                                            calibrationTab === item.id 
+                                                ? 'bg-slate-900 text-white border-slate-900 shadow-2xs' 
+                                                : item.enabled
+                                                    ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                                    : 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
                                         }`}
-                                >
-                                    Name
-                                </button>
-                                <button
-                                    onClick={() => setCalibrationTab('regNo')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'regNo' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                        }`}
-                                >
-                                    Reg No
-                                </button>
-                                <button
-                                    onClick={() => setCalibrationTab('qrCode')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'qrCode' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                        }`}
-                                >
-                                    QR Code
-                                </button>
-                                <button
-                                    onClick={() => setCalibrationTab('certId')}
-                                    className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${calibrationTab === 'certId' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                        }`}
-                                >
-                                    Cert ID
-                                </button>
+                                    >
+                                        <span>{item.label}</span>
+                                        {!item.enabled && (
+                                            <span className="text-[9px] px-1 py-0.2 bg-rose-200/80 text-rose-800 rounded font-bold">Off</span>
+                                        )}
+                                    </button>
+                                ))}
                             </div>
                         </div>
 
@@ -3330,183 +3477,342 @@ export default function OrganizerCertificatesPage() {
                                         />
 
                                         {/* DRAGGABLE PLACEHOLDER: NAME */}
-                                        <div
-                                            onMouseDown={(e) => startDrag('name', e)}
-                                            onTouchStart={(e) => startDrag('name', e)}
-                                            onClick={() => setCalibrationTab('name')}
-                                            style={{
-                                                left: `${(layout.name.x / templateDimensions.width) * 100}%`,
-                                                top: `${(layout.name.y / templateDimensions.height) * 100}%`,
-                                                transform: layout.name.align === 'center' ? 'translate(-50%, -50%)' : layout.name.align === 'right' ? 'translate(-100%, -50%)' : 'translate(0%, -50%)',
-                                                color: layout.name.color,
-                                                fontSize: `${Math.max(12, layout.name.fontSize * previewScale)}px`,
-                                                fontWeight: layout.name.fontWeight,
-                                                fontFamily: layout.name.fontFamily
-                                            }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'name'
-                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2.5 py-1 shadow-xl'
-                                                : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2.5 py-1'
-                                                }`}
-                                        >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'name' || draggingElement === 'name'
-                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                                }`}>
-                                                <Move size={10} />
-                                                <span>Participant Name</span>
-                                                {(draggingElement === 'name' || calibrationTab === 'name') && (
-                                                    <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
-                                                        {layout.name.x}, {layout.name.y}
-                                                    </span>
-                                                )}
+                                        {layout.name?.enabled !== false && (
+                                            <div
+                                                onMouseDown={(e) => startDrag('name', e)}
+                                                onTouchStart={(e) => startDrag('name', e)}
+                                                onClick={() => setCalibrationTab('name')}
+                                                style={{
+                                                    left: `${(layout.name.x / templateDimensions.width) * 100}%`,
+                                                    top: `${(layout.name.y / templateDimensions.height) * 100}%`,
+                                                    transform: layout.name.align === 'center' ? 'translate(-50%, -50%)' : layout.name.align === 'right' ? 'translate(-100%, -50%)' : 'translate(0%, -50%)',
+                                                    color: layout.name.color,
+                                                    fontSize: `${Math.max(12, layout.name.fontSize * previewScale)}px`,
+                                                    fontWeight: layout.name.fontWeight,
+                                                    fontFamily: layout.name.fontFamily
+                                                }}
+                                                className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'name'
+                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2.5 py-1 shadow-xl'
+                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2.5 py-1'
+                                                    }`}
+                                            >
+                                                <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'name' || draggingElement === 'name'
+                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                    }`}>
+                                                    <Move size={10} />
+                                                    <span>Participant Name</span>
+                                                    {(draggingElement === 'name' || calibrationTab === 'name') && (
+                                                        <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
+                                                            {layout.name.x}, {layout.name.y}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        title="Remove Name from certificate"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setLayout(prev => ({ ...prev, name: { ...prev.name, enabled: false } }))
+                                                        }}
+                                                        className="hover:bg-rose-600 rounded p-0.5 ml-1 text-white/80 hover:text-white transition-colors cursor-pointer"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
+                                                </div>
+                                                <span>{participants[previewIndex]?.name || 'Alex Johnson'}</span>
                                             </div>
-                                            <span>{participants[previewIndex]?.name || 'Alex Johnson'}</span>
-                                        </div>
+                                        )}
 
                                         {/* DRAGGABLE PLACEHOLDER: REG NO */}
-                                        <div
-                                            onMouseDown={(e) => startDrag('regNo', e)}
-                                            onTouchStart={(e) => startDrag('regNo', e)}
-                                            onClick={() => setCalibrationTab('regNo')}
-                                            style={{
-                                                left: `${(layout.regNo.x / templateDimensions.width) * 100}%`,
-                                                top: `${(layout.regNo.y / templateDimensions.height) * 100}%`,
-                                                transform: 'translate(-50%, -50%)',
-                                                color: layout.regNo.color,
-                                                fontSize: `${Math.max(10, layout.regNo.fontSize * previewScale)}px`,
-                                                fontWeight: layout.regNo.fontWeight,
-                                                fontFamily: layout.regNo.fontFamily
-                                            }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'regNo'
-                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
-                                                : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
-                                                }`}
-                                        >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'regNo' || draggingElement === 'regNo'
-                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                                }`}>
-                                                <Move size={10} />
-                                                <span>Reg No</span>
-                                                {(draggingElement === 'regNo' || calibrationTab === 'regNo') && (
-                                                    <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
-                                                        {layout.regNo.x}, {layout.regNo.y}
-                                                    </span>
-                                                )}
+                                        {layout.regNo?.enabled !== false && (
+                                            <div
+                                                onMouseDown={(e) => startDrag('regNo', e)}
+                                                onTouchStart={(e) => startDrag('regNo', e)}
+                                                onClick={() => setCalibrationTab('regNo')}
+                                                style={{
+                                                    left: `${(layout.regNo.x / templateDimensions.width) * 100}%`,
+                                                    top: `${(layout.regNo.y / templateDimensions.height) * 100}%`,
+                                                    transform: 'translate(-50%, -50%)',
+                                                    color: layout.regNo.color,
+                                                    fontSize: `${Math.max(10, layout.regNo.fontSize * previewScale)}px`,
+                                                    fontWeight: layout.regNo.fontWeight,
+                                                    fontFamily: layout.regNo.fontFamily
+                                                }}
+                                                className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'regNo'
+                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
+                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
+                                                    }`}
+                                            >
+                                                <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'regNo' || draggingElement === 'regNo'
+                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                    }`}>
+                                                    <Move size={10} />
+                                                    <span>Reg No</span>
+                                                    {(draggingElement === 'regNo' || calibrationTab === 'regNo') && (
+                                                        <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
+                                                            {layout.regNo.x}, {layout.regNo.y}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        title="Remove Reg No from certificate"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setLayout(prev => ({ ...prev, regNo: { ...prev.regNo, enabled: false } }))
+                                                        }}
+                                                        className="hover:bg-rose-600 rounded p-0.5 ml-1 text-white/80 hover:text-white transition-colors cursor-pointer"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
+                                                </div>
+                                                <span>{layout.regNo.prefix}{participants[previewIndex]?.reg_no || '21BCE1092'}</span>
                                             </div>
-                                            <span>{layout.regNo.prefix}{participants[previewIndex]?.reg_no || '21BCE1092'}</span>
-                                        </div>
+                                        )}
 
                                         {/* DRAGGABLE PLACEHOLDER: UNIQUE ID */}
-                                        <div
-                                            onMouseDown={(e) => startDrag('certId', e)}
-                                            onTouchStart={(e) => startDrag('certId', e)}
-                                            onClick={() => setCalibrationTab('certId')}
-                                            style={{
-                                                left: `${(layout.certId.x / templateDimensions.width) * 100}%`,
-                                                top: `${(layout.certId.y / templateDimensions.height) * 100}%`,
-                                                transform: 'translate(-50%, -50%)',
-                                                color: layout.certId.color,
-                                                fontSize: `${Math.max(9, layout.certId.fontSize * previewScale)}px`,
-                                                fontWeight: layout.certId.fontWeight,
-                                                fontFamily: layout.certId.fontFamily
-                                            }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'certId'
-                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
-                                                : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
-                                                }`}
-                                        >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'certId' || draggingElement === 'certId'
-                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                                }`}>
-                                                <Move size={10} />
-                                                <span>Cert ID</span>
-                                                {(draggingElement === 'certId' || calibrationTab === 'certId') && (
-                                                    <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
-                                                        {layout.certId.x}, {layout.certId.y}
-                                                    </span>
-                                                )}
+                                        {layout.certId?.enabled !== false && (
+                                            <div
+                                                onMouseDown={(e) => startDrag('certId', e)}
+                                                onTouchStart={(e) => startDrag('certId', e)}
+                                                onClick={() => setCalibrationTab('certId')}
+                                                style={{
+                                                    left: `${(layout.certId.x / templateDimensions.width) * 100}%`,
+                                                    top: `${(layout.certId.y / templateDimensions.height) * 100}%`,
+                                                    transform: 'translate(-50%, -50%)',
+                                                    color: layout.certId.color,
+                                                    fontSize: `${Math.max(9, layout.certId.fontSize * previewScale)}px`,
+                                                    fontWeight: layout.certId.fontWeight,
+                                                    fontFamily: layout.certId.fontFamily
+                                                }}
+                                                className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'certId'
+                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
+                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
+                                                    }`}
+                                            >
+                                                <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'certId' || draggingElement === 'certId'
+                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                    }`}>
+                                                    <Move size={10} />
+                                                    <span>Cert ID</span>
+                                                    {(draggingElement === 'certId' || calibrationTab === 'certId') && (
+                                                        <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
+                                                            {layout.certId.x}, {layout.certId.y}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        title="Remove Cert ID from certificate"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setLayout(prev => ({ ...prev, certId: { ...prev.certId, enabled: false } }))
+                                                        }}
+                                                        className="hover:bg-rose-600 rounded p-0.5 ml-1 text-white/80 hover:text-white transition-colors cursor-pointer"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
+                                                </div>
+                                                <span>{layout.certId.prefix}GDG-KARE-PREV-99A1</span>
                                             </div>
-                                            <span>{layout.certId.prefix}GDG-KARE-PREV-99A1</span>
-                                        </div>
+                                        )}
 
                                         {/* DRAGGABLE PLACEHOLDER: QR CODE */}
-                                        <div
-                                            onMouseDown={(e) => startDrag('qrCode', e)}
-                                            onTouchStart={(e) => startDrag('qrCode', e)}
-                                            onClick={() => setCalibrationTab('qrCode')}
-                                            style={{
-                                                left: `${(layout.qrCode.x / templateDimensions.width) * 100}%`,
-                                                top: `${(layout.qrCode.y / templateDimensions.height) * 100}%`,
-                                                width: `${layout.qrCode.size * previewScale}px`,
-                                                height: `${layout.qrCode.size * previewScale}px`
-                                            }}
-                                            className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none p-0.5 rounded ${calibrationTab === 'qrCode'
-                                                ? 'ring-2 ring-emerald-400 bg-emerald-500/30 shadow-2xl'
-                                                : 'hover:ring-1 hover:ring-white/70'
-                                                }`}
-                                        >
-                                            <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'qrCode' || draggingElement === 'qrCode'
-                                                ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
-                                                : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
-                                                }`}>
-                                                <Move size={10} />
-                                                <span>QR Code</span>
-                                                {(draggingElement === 'qrCode' || calibrationTab === 'qrCode') && (
-                                                    <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
-                                                        {layout.qrCode.x}, {layout.qrCode.y}
-                                                    </span>
+                                        {layout.qrCode?.enabled !== false && (
+                                            <div
+                                                onMouseDown={(e) => startDrag('qrCode', e)}
+                                                onTouchStart={(e) => startDrag('qrCode', e)}
+                                                onClick={() => setCalibrationTab('qrCode')}
+                                                style={{
+                                                    left: `${(layout.qrCode.x / templateDimensions.width) * 100}%`,
+                                                    top: `${(layout.qrCode.y / templateDimensions.height) * 100}%`,
+                                                    width: `${layout.qrCode.size * previewScale}px`,
+                                                    height: `${layout.qrCode.size * previewScale}px`
+                                                }}
+                                                className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none p-0.5 rounded ${calibrationTab === 'qrCode'
+                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/30 shadow-2xl'
+                                                    : 'hover:ring-1 hover:ring-white/70'
+                                                    }`}
+                                            >
+                                                <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'qrCode' || draggingElement === 'qrCode'
+                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                    }`}>
+                                                    <Move size={10} />
+                                                    <span>QR Code</span>
+                                                    {(draggingElement === 'qrCode' || calibrationTab === 'qrCode') && (
+                                                        <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
+                                                            {layout.qrCode.x}, {layout.qrCode.y}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        title="Remove QR Code from certificate"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setLayout(prev => ({ ...prev, qrCode: { ...prev.qrCode, enabled: false } }))
+                                                        }}
+                                                        className="hover:bg-rose-600 rounded p-0.5 ml-1 text-white/80 hover:text-white transition-colors cursor-pointer"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
+                                                </div>
+                                                {sampleQrDataUrl ? (
+                                                    <img
+                                                        src={sampleQrDataUrl}
+                                                        alt="QR Preview"
+                                                        className="w-full h-full object-contain pointer-events-none rounded bg-white"
+                                                    />
+                                                ) : (
+                                                    <div className="w-full h-full bg-white flex items-center justify-center text-[10px] text-gray-500 font-mono rounded">
+                                                        QR Code
+                                                    </div>
                                                 )}
                                             </div>
-                                            {sampleQrDataUrl ? (
-                                                <img
-                                                    src={sampleQrDataUrl}
-                                                    alt="QR Preview"
-                                                    className="w-full h-full object-contain pointer-events-none rounded bg-white"
-                                                />
-                                            ) : (
-                                                <div className="w-full h-full bg-white flex items-center justify-center text-[10px] text-gray-500 font-mono rounded">
-                                                    QR Code
+                                        )}
+
+                                        {/* DRAGGABLE PLACEHOLDER: ACADEMIC CREDIT / TRACK */}
+                                        {(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false && (
+                                            <div
+                                                onMouseDown={(e) => startDrag('credit', e)}
+                                                onTouchStart={(e) => startDrag('credit', e)}
+                                                onClick={() => setCalibrationTab('credit')}
+                                                style={{
+                                                    left: `${((layout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x) / templateDimensions.width) * 100}%`,
+                                                    top: `${((layout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y) / templateDimensions.height) * 100}%`,
+                                                    transform: (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'center' ? 'translate(-50%, -50%)' : (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'right' ? 'translate(-100%, -50%)' : 'translate(0%, -50%)',
+                                                    color: layout.credit?.color ?? DEFAULT_CREDIT_LAYOUT.color,
+                                                    fontSize: `${Math.max(10, (layout.credit?.fontSize ?? DEFAULT_CREDIT_LAYOUT.fontSize) * previewScale)}px`,
+                                                    fontWeight: layout.credit?.fontWeight ?? DEFAULT_CREDIT_LAYOUT.fontWeight,
+                                                    fontFamily: layout.credit?.fontFamily ?? DEFAULT_CREDIT_LAYOUT.fontFamily
+                                                }}
+                                                className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'credit'
+                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
+                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
+                                                    }`}
+                                            >
+                                                <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'credit' || draggingElement === 'credit'
+                                                    ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
+                                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
+                                                    }`}>
+                                                    <Move size={10} />
+                                                    <span>Academic Credit / Track</span>
+                                                    {(draggingElement === 'credit' || calibrationTab === 'credit') && (
+                                                        <span className="font-mono text-[9px] bg-emerald-800/80 px-1 rounded ml-1">
+                                                            {layout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x}, {layout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y}
+                                                        </span>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        title="Remove Credit text from certificate"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    enabled: false
+                                                                }
+                                                            }))
+                                                        }}
+                                                        className="hover:bg-rose-600 rounded p-0.5 ml-1 text-white/80 hover:text-white transition-colors cursor-pointer"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
                                                 </div>
-                                            )}
-                                        </div>
+                                                <span>
+                                                    {getParticipantCreditText(
+                                                        participants[previewIndex] || {
+                                                            id: 'sample',
+                                                            name: 'Alex Johnson',
+                                                            reg_no: '21BCE1092',
+                                                            dept: 'CSE',
+                                                            section: 'A',
+                                                            year: '2nd Year',
+                                                            category: 'Group 3',
+                                                            selected: true
+                                                        },
+                                                        layout.credit || DEFAULT_CREDIT_LAYOUT
+                                                    ) || (layout.credit?.text2ndYear || 'Non CGPA - Group 3')}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
 
                             {/* Calibration Controls */}
                             <div className="lg:col-span-4 bg-slate-50 border border-gray-200 rounded-2xl p-5 space-y-4">
-                                <div className="flex border-b border-gray-200 pb-2 gap-1 text-xs font-bold">
-                                    <button
-                                        onClick={() => setCalibrationTab('name')}
-                                        className={`px-2.5 py-1 rounded-lg ${calibrationTab === 'name' ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        Name
-                                    </button>
-                                    <button
-                                        onClick={() => setCalibrationTab('regNo')}
-                                        className={`px-2.5 py-1 rounded-lg ${calibrationTab === 'regNo' ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        Reg No
-                                    </button>
-                                    <button
-                                        onClick={() => setCalibrationTab('qrCode')}
-                                        className={`px-2.5 py-1 rounded-lg ${calibrationTab === 'qrCode' ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        QR Code
-                                    </button>
-                                    <button
-                                        onClick={() => setCalibrationTab('certId')}
-                                        className={`px-2.5 py-1 rounded-lg ${calibrationTab === 'certId' ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        Cert ID
-                                    </button>
+                                <div className="flex border-b border-gray-200 pb-2 gap-1 text-xs font-bold overflow-x-auto">
+                                    {[
+                                        { id: 'name', label: 'Name', enabled: layout.name?.enabled !== false },
+                                        { id: 'regNo', label: 'Reg No', enabled: layout.regNo?.enabled !== false },
+                                        { id: 'credit', label: 'Credit', enabled: (layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false },
+                                        { id: 'qrCode', label: 'QR Code', enabled: layout.qrCode?.enabled !== false },
+                                        { id: 'certId', label: 'Cert ID', enabled: layout.certId?.enabled !== false }
+                                    ].map(item => (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            onClick={() => setCalibrationTab(item.id as any)}
+                                            className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                                                calibrationTab === item.id 
+                                                    ? 'bg-slate-900 text-white' 
+                                                    : item.enabled
+                                                        ? 'text-gray-600 hover:bg-gray-200'
+                                                        : 'text-rose-600 hover:bg-rose-50'
+                                            }`}
+                                        >
+                                            <span>{item.label}</span>
+                                            {!item.enabled && (
+                                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                            )}
+                                        </button>
+                                    ))}
                                 </div>
 
                                 {/* Dynamic Sub-panels */}
                                 {calibrationTab === 'name' && (
                                     <div className="space-y-3 text-xs">
+                                        {/* Status & Remove/Restore Box Control */}
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                            layout.name?.enabled !== false 
+                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
+                                                : 'bg-rose-50 border-rose-200 text-rose-900'
+                                        }`}>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`w-2 h-2 rounded-full ${layout.name?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                <span className="font-bold text-[11px]">
+                                                    {layout.name?.enabled !== false ? 'Printing Name on Certificate' : 'Name Box Removed'}
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setLayout(prev => ({
+                                                    ...prev,
+                                                    name: { ...prev.name, enabled: prev.name?.enabled === false ? true : false }
+                                                }))}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                    layout.name?.enabled !== false
+                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                }`}
+                                            >
+                                                {layout.name?.enabled !== false ? (
+                                                    <>
+                                                        <Trash2 size={12} />
+                                                        <span>Remove Box</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Plus size={12} />
+                                                        <span>Restore Box</span>
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
                                                 <label className="text-gray-600 font-semibold block mb-1">X Position</label>
@@ -3581,6 +3887,44 @@ export default function OrganizerCertificatesPage() {
 
                                 {calibrationTab === 'regNo' && (
                                     <div className="space-y-3 text-xs">
+                                        {/* Status & Remove/Restore Box Control */}
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                            layout.regNo?.enabled !== false 
+                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
+                                                : 'bg-rose-50 border-rose-200 text-rose-900'
+                                        }`}>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`w-2 h-2 rounded-full ${layout.regNo?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                <span className="font-bold text-[11px]">
+                                                    {layout.regNo?.enabled !== false ? 'Printing Reg No on Certificate' : 'Reg No Box Removed'}
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setLayout(prev => ({
+                                                    ...prev,
+                                                    regNo: { ...prev.regNo, enabled: prev.regNo?.enabled === false ? true : false }
+                                                }))}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                    layout.regNo?.enabled !== false
+                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                }`}
+                                            >
+                                                {layout.regNo?.enabled !== false ? (
+                                                    <>
+                                                        <Trash2 size={12} />
+                                                        <span>Remove Box</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Plus size={12} />
+                                                        <span>Restore Box</span>
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
                                                 <label className="text-gray-600 font-semibold block mb-1">X Position</label>
@@ -3650,8 +3994,294 @@ export default function OrganizerCertificatesPage() {
                                     </div>
                                 )}
 
+                                {calibrationTab === 'credit' && (
+                                    <div className="space-y-3 text-xs">
+                                        {/* Status & Remove/Restore Box Control */}
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                            (layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false 
+                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
+                                                : 'bg-rose-50 border-rose-200 text-rose-900'
+                                        }`}>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`w-2 h-2 rounded-full ${(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                <span className="font-bold text-[11px]">
+                                                    {(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? 'Printing Credit on Certificate' : 'Credit Box Removed'}
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setLayout(prev => ({
+                                                    ...prev,
+                                                    credit: {
+                                                        ...DEFAULT_CREDIT_LAYOUT,
+                                                        ...(prev.credit || {}),
+                                                        enabled: (prev.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) === false ? true : false
+                                                    }
+                                                }))}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                    (layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                }`}
+                                            >
+                                                {(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? (
+                                                    <>
+                                                        <Trash2 size={12} />
+                                                        <span>Remove Box</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Plus size={12} />
+                                                        <span>Restore Box</span>
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+
+                                        {/* Dynamic Content Inputs */}
+                                        <div className="bg-white p-3 rounded-xl border border-gray-200 space-y-2.5">
+                                            <span className="text-[11px] font-bold text-gray-800 block">Dynamic Text Content</span>
+                                            <div>
+                                                <label className="text-[11px] text-gray-600 font-semibold block mb-1">
+                                                    2nd Year Text:
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={layout.credit?.text2ndYear ?? DEFAULT_CREDIT_LAYOUT.text2ndYear}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value
+                                                        setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                text2ndYear: val
+                                                            }
+                                                        }))
+                                                    }}
+                                                    placeholder="Non CGPA - Group 3"
+                                                    className="w-full bg-slate-50 border border-gray-300 rounded-lg p-2 text-xs font-semibold"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[11px] text-gray-600 font-semibold block mb-1">
+                                                    3rd & 4th Year Text:
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={layout.credit?.text3rd4thYear ?? DEFAULT_CREDIT_LAYOUT.text3rd4thYear}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value
+                                                        setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                text3rd4thYear: val
+                                                            }
+                                                        }))
+                                                    }}
+                                                    placeholder="2 EE credit"
+                                                    className="w-full bg-slate-50 border border-gray-300 rounded-lg p-2 text-xs font-semibold"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[11px] text-gray-600 font-semibold block mb-1">
+                                                    Prefix (Optional):
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={layout.credit?.prefix ?? ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value
+                                                        setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                prefix: val
+                                                            }
+                                                        }))
+                                                    }}
+                                                    placeholder="e.g. Category: "
+                                                    className="w-full bg-slate-50 border border-gray-300 rounded-lg p-2 text-xs"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Coordinates */}
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="text-gray-600 font-semibold block mb-1">X Position</label>
+                                                <input
+                                                    type="number"
+                                                    value={layout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x}
+                                                    onChange={(e) => {
+                                                        const val = Number(e.target.value)
+                                                        setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                x: val
+                                                            }
+                                                        }))
+                                                    }}
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-gray-600 font-semibold block mb-1">Y Position</label>
+                                                <input
+                                                    type="number"
+                                                    value={layout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y}
+                                                    onChange={(e) => {
+                                                        const val = Number(e.target.value)
+                                                        setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                y: val
+                                                            }
+                                                        }))
+                                                    }}
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Font Size & Color */}
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="text-gray-600 font-semibold block mb-1">Font Size (px)</label>
+                                                <input
+                                                    type="number"
+                                                    value={layout.credit?.fontSize ?? DEFAULT_CREDIT_LAYOUT.fontSize}
+                                                    onChange={(e) => {
+                                                        const val = Number(e.target.value)
+                                                        setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                fontSize: val
+                                                            }
+                                                        }))
+                                                    }}
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-gray-600 font-semibold block mb-1">Color</label>
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="color"
+                                                        value={layout.credit?.color ?? DEFAULT_CREDIT_LAYOUT.color}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value
+                                                            setLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    color: val
+                                                                }
+                                                            }))
+                                                        }}
+                                                        className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                                    />
+                                                    <span className="font-mono text-xs">{layout.credit?.color ?? DEFAULT_CREDIT_LAYOUT.color}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Font Weight */}
+                                        <div>
+                                            <label className="text-gray-600 font-semibold block mb-1">Font Weight</label>
+                                            <select
+                                                value={layout.credit?.fontWeight ?? DEFAULT_CREDIT_LAYOUT.fontWeight}
+                                                onChange={(e) => {
+                                                    const val = e.target.value
+                                                    setLayout(prev => ({
+                                                        ...prev,
+                                                        credit: {
+                                                            ...DEFAULT_CREDIT_LAYOUT,
+                                                            ...(prev.credit || {}),
+                                                            fontWeight: val
+                                                        }
+                                                    }))
+                                                }}
+                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
+                                            >
+                                                <option value="normal">Normal (400)</option>
+                                                <option value="600">Semi Bold (600)</option>
+                                                <option value="bold">Bold (700)</option>
+                                                <option value="800">Extra Bold (800)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* Center Horizontally */}
+                                        <div className="pt-2 border-t border-gray-200">
+                                            <button
+                                                type="button"
+                                                onClick={() => setLayout(prev => ({
+                                                    ...prev,
+                                                    credit: {
+                                                        ...DEFAULT_CREDIT_LAYOUT,
+                                                        ...(prev.credit || {}),
+                                                        x: Math.round(templateDimensions.width / 2)
+                                                    }
+                                                }))}
+                                                className="text-[11px] text-emerald-600 hover:text-emerald-700 font-bold flex items-center gap-1.5"
+                                            >
+                                                <AlignCenter size={13} />
+                                                <span>Center Horizontally (X: {Math.round(templateDimensions.width / 2)})</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {calibrationTab === 'qrCode' && (
                                     <div className="space-y-3 text-xs">
+                                        {/* Status & Remove/Restore Box Control */}
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                            layout.qrCode?.enabled !== false 
+                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
+                                                : 'bg-rose-50 border-rose-200 text-rose-900'
+                                        }`}>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`w-2 h-2 rounded-full ${layout.qrCode?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                <span className="font-bold text-[11px]">
+                                                    {layout.qrCode?.enabled !== false ? 'Printing QR Code on Certificate' : 'QR Code Removed'}
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setLayout(prev => ({
+                                                    ...prev,
+                                                    qrCode: { ...prev.qrCode, enabled: prev.qrCode?.enabled === false ? true : false }
+                                                }))}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                    layout.qrCode?.enabled !== false
+                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                }`}
+                                            >
+                                                {layout.qrCode?.enabled !== false ? (
+                                                    <>
+                                                        <Trash2 size={12} />
+                                                        <span>Remove Box</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Plus size={12} />
+                                                        <span>Restore Box</span>
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
                                                 <label className="text-gray-600 font-semibold block mb-1">X Position</label>
@@ -3708,6 +4338,44 @@ export default function OrganizerCertificatesPage() {
 
                                 {calibrationTab === 'certId' && (
                                     <div className="space-y-3 text-xs">
+                                        {/* Status & Remove/Restore Box Control */}
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                            layout.certId?.enabled !== false 
+                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
+                                                : 'bg-rose-50 border-rose-200 text-rose-900'
+                                        }`}>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`w-2 h-2 rounded-full ${layout.certId?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                <span className="font-bold text-[11px]">
+                                                    {layout.certId?.enabled !== false ? 'Printing Cert ID on Certificate' : 'Cert ID Box Removed'}
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setLayout(prev => ({
+                                                    ...prev,
+                                                    certId: { ...prev.certId, enabled: prev.certId?.enabled === false ? true : false }
+                                                }))}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                    layout.certId?.enabled !== false
+                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                }`}
+                                            >
+                                                {layout.certId?.enabled !== false ? (
+                                                    <>
+                                                        <Trash2 size={12} />
+                                                        <span>Remove Box</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Plus size={12} />
+                                                        <span>Restore Box</span>
+                                                    </>
+                                                )}
+                                            </button>
+                                        </div>
+
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
                                                 <label className="text-gray-600 font-semibold block mb-1">X Position</label>
@@ -4371,18 +5039,32 @@ export default function OrganizerCertificatesPage() {
                                     </div>
 
                                     {/* Tuner Navigation Tabs */}
-                                    <div className="grid grid-cols-4 bg-slate-950/50 p-1 border-b border-slate-800 text-xs">
-                                        {(['name', 'regNo', 'certId', 'qrCode'] as const).map(tab => {
-                                            const labels = { name: '👤 Name', regNo: '🆔 RegNo', certId: '🔖 CertID', qrCode: '📱 QR' }
+                                    <div className="grid grid-cols-5 bg-slate-950/50 p-1 border-b border-slate-800 text-xs">
+                                        {(['name', 'regNo', 'credit', 'certId', 'qrCode'] as const).map(tab => {
+                                            const isEnabled = tab === 'name' ? previewLayout.name?.enabled !== false
+                                                : tab === 'regNo' ? previewLayout.regNo?.enabled !== false
+                                                : tab === 'credit' ? (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                : tab === 'certId' ? previewLayout.certId?.enabled !== false
+                                                : previewLayout.qrCode?.enabled !== false
+
+                                            const labels = {
+                                                name: `👤 Name${!isEnabled ? ' (Off)' : ''}`,
+                                                regNo: `🆔 RegNo${!isEnabled ? ' (Off)' : ''}`,
+                                                credit: `🎓 Credit${!isEnabled ? ' (Off)' : ''}`,
+                                                certId: `🔖 ID${!isEnabled ? ' (Off)' : ''}`,
+                                                qrCode: `📱 QR${!isEnabled ? ' (Off)' : ''}`
+                                            }
                                             const isActive = previewTunerTab === tab
                                             return (
                                                 <button
                                                     key={tab}
                                                     type="button"
                                                     onClick={() => setPreviewTunerTab(tab)}
-                                                    className={`py-1.5 rounded-lg font-bold text-[11px] transition-all cursor-pointer ${isActive
+                                                    className={`py-1.5 rounded-lg font-bold text-[10px] sm:text-[11px] transition-all cursor-pointer ${isActive
                                                         ? 'bg-amber-400 text-slate-950 shadow-sm'
-                                                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                                        : isEnabled
+                                                            ? 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                                            : 'text-rose-400/80 hover:text-rose-300 hover:bg-slate-800/80'
                                                         }`}
                                                 >
                                                     {labels[tab]}
@@ -4396,6 +5078,44 @@ export default function OrganizerCertificatesPage() {
                                         {/* TAB 1: NAME CONTROLS */}
                                         {previewTunerTab === 'name' && (
                                             <div className="space-y-4">
+                                                {/* Status & Remove/Restore Box Control */}
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                                    previewLayout.name?.enabled !== false
+                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                }`}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-2 h-2 rounded-full ${previewLayout.name?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                                                        <span className="font-bold text-[11px]">
+                                                            {previewLayout.name?.enabled !== false ? 'Active on Certificate' : 'Name Box Removed'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                            ...prev,
+                                                            name: { ...prev.name, enabled: prev.name?.enabled === false ? true : false }
+                                                        }))}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                            previewLayout.name?.enabled !== false
+                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                        }`}
+                                                    >
+                                                        {previewLayout.name?.enabled !== false ? (
+                                                            <>
+                                                                <Trash2 size={12} />
+                                                                <span>Remove Box</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Plus size={12} />
+                                                                <span>Restore Box</span>
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                </div>
+
                                                 {/* Font Size */}
                                                 <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
                                                     <div className="flex items-center justify-between">
@@ -4594,6 +5314,44 @@ export default function OrganizerCertificatesPage() {
                                         {/* TAB 2: REG NO CONTROLS */}
                                         {previewTunerTab === 'regNo' && (
                                             <div className="space-y-4">
+                                                {/* Status & Remove/Restore Box Control */}
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                                    previewLayout.regNo?.enabled !== false
+                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                }`}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-2 h-2 rounded-full ${previewLayout.regNo?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                                                        <span className="font-bold text-[11px]">
+                                                            {previewLayout.regNo?.enabled !== false ? 'Active on Certificate' : 'Reg No Box Removed'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                            ...prev,
+                                                            regNo: { ...prev.regNo, enabled: prev.regNo?.enabled === false ? true : false }
+                                                        }))}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                            previewLayout.regNo?.enabled !== false
+                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                        }`}
+                                                    >
+                                                        {previewLayout.regNo?.enabled !== false ? (
+                                                            <>
+                                                                <Trash2 size={12} />
+                                                                <span>Remove Box</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Plus size={12} />
+                                                                <span>Restore Box</span>
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                </div>
+
                                                 <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
                                                     <div className="flex items-center justify-between">
                                                         <label className="text-[11px] font-bold text-slate-300">Reg No Font Size</label>
@@ -4661,9 +5419,231 @@ export default function OrganizerCertificatesPage() {
                                             </div>
                                         )}
 
+                                        {/* TAB: ACADEMIC CREDIT / TRACK CONTROLS */}
+                                        {previewTunerTab === 'credit' && (
+                                            <div className="space-y-4">
+                                                {/* Status & Remove/Restore Box Control */}
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                                    (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                }`}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-2 h-2 rounded-full ${(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                                                        <span className="font-bold text-[11px]">
+                                                            {(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? 'Active on Certificate' : 'Credit Box Removed'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                enabled: (prev.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) === false ? true : false
+                                                            }
+                                                        }))}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                            (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                        }`}
+                                                    >
+                                                        {(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? (
+                                                            <>
+                                                                <Trash2 size={12} />
+                                                                <span>Remove Box</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Plus size={12} />
+                                                                <span>Restore Box</span>
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                </div>
+
+                                                {/* Text for 2nd Year */}
+                                                <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-1.5">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="text-[11px] font-bold text-amber-400">2nd Year Text</label>
+                                                        <span className="text-[10px] text-slate-400 font-mono">Editable</span>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        value={previewLayout.credit?.text2ndYear ?? DEFAULT_CREDIT_LAYOUT.text2ndYear}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value
+                                                            handleUpdatePreviewLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    text2ndYear: val
+                                                                }
+                                                            }))
+                                                        }}
+                                                        placeholder="Non CGPA - Group 3"
+                                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold"
+                                                    />
+                                                </div>
+
+                                                {/* Text for 3rd & 4th Year */}
+                                                <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-1.5">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="text-[11px] font-bold text-emerald-400">3rd & 4th Year Text</label>
+                                                        <span className="text-[10px] text-slate-400 font-mono">Editable</span>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        value={previewLayout.credit?.text3rd4thYear ?? DEFAULT_CREDIT_LAYOUT.text3rd4thYear}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value
+                                                            handleUpdatePreviewLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    text3rd4thYear: val
+                                                                }
+                                                            }))
+                                                        }}
+                                                        placeholder="2 EE credit"
+                                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold"
+                                                    />
+                                                </div>
+
+                                                {/* Font Size */}
+                                                <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="text-[11px] font-bold text-slate-300">Credit Font Size</label>
+                                                        <span className="text-xs font-mono font-bold text-amber-400">
+                                                            {previewLayout.credit?.fontSize ?? DEFAULT_CREDIT_LAYOUT.fontSize}px
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min={10}
+                                                        max={300}
+                                                        step={2}
+                                                        value={previewLayout.credit?.fontSize ?? DEFAULT_CREDIT_LAYOUT.fontSize}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value, 10)
+                                                            handleUpdatePreviewLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    fontSize: val
+                                                                }
+                                                            }))
+                                                        }}
+                                                        className="w-full accent-amber-400 cursor-pointer"
+                                                    />
+                                                </div>
+
+                                                {/* Position Y */}
+                                                <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="text-[11px] font-bold text-slate-300">Position Y</label>
+                                                        <span className="text-xs font-mono font-bold text-emerald-400">
+                                                            Y: {previewLayout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min={100}
+                                                        max={templateDimensions.height || 5000}
+                                                        step={10}
+                                                        value={previewLayout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value, 10)
+                                                            handleUpdatePreviewLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    y: val
+                                                                }
+                                                            }))
+                                                        }}
+                                                        className="w-full accent-emerald-400 cursor-pointer"
+                                                    />
+                                                </div>
+
+                                                {/* Position X */}
+                                                <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="text-[11px] font-bold text-slate-300">Position X</label>
+                                                        <span className="text-xs font-mono font-bold text-purple-400">
+                                                            X: {previewLayout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min={100}
+                                                        max={templateDimensions.width || 7500}
+                                                        step={10}
+                                                        value={previewLayout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value, 10)
+                                                            handleUpdatePreviewLayout(prev => ({
+                                                                ...prev,
+                                                                credit: {
+                                                                    ...DEFAULT_CREDIT_LAYOUT,
+                                                                    ...(prev.credit || {}),
+                                                                    x: val
+                                                                }
+                                                            }))
+                                                        }}
+                                                        className="w-full accent-purple-400 cursor-pointer"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {/* TAB 3: CERT ID CONTROLS */}
                                         {previewTunerTab === 'certId' && (
                                             <div className="space-y-4">
+                                                {/* Status & Remove/Restore Box Control */}
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                                    previewLayout.certId?.enabled !== false
+                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                }`}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-2 h-2 rounded-full ${previewLayout.certId?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                                                        <span className="font-bold text-[11px]">
+                                                            {previewLayout.certId?.enabled !== false ? 'Active on Certificate' : 'Cert ID Box Removed'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                            ...prev,
+                                                            certId: { ...prev.certId, enabled: prev.certId?.enabled === false ? true : false }
+                                                        }))}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                            previewLayout.certId?.enabled !== false
+                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                        }`}
+                                                    >
+                                                        {previewLayout.certId?.enabled !== false ? (
+                                                            <>
+                                                                <Trash2 size={12} />
+                                                                <span>Remove Box</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Plus size={12} />
+                                                                <span>Restore Box</span>
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                </div>
+
                                                 <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
                                                     <div className="flex items-center justify-between">
                                                         <label className="text-[11px] font-bold text-slate-300">Cert ID Font Size</label>
@@ -4734,6 +5714,44 @@ export default function OrganizerCertificatesPage() {
                                         {/* TAB 4: QR CODE CONTROLS */}
                                         {previewTunerTab === 'qrCode' && (
                                             <div className="space-y-4">
+                                                {/* Status & Remove/Restore Box Control */}
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                                                    previewLayout.qrCode?.enabled !== false
+                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                }`}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-2 h-2 rounded-full ${previewLayout.qrCode?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                                                        <span className="font-bold text-[11px]">
+                                                            {previewLayout.qrCode?.enabled !== false ? 'Active on Certificate' : 'QR Code Box Removed'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                            ...prev,
+                                                            qrCode: { ...prev.qrCode, enabled: prev.qrCode?.enabled === false ? true : false }
+                                                        }))}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
+                                                            previewLayout.qrCode?.enabled !== false
+                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                        }`}
+                                                    >
+                                                        {previewLayout.qrCode?.enabled !== false ? (
+                                                            <>
+                                                                <Trash2 size={12} />
+                                                                <span>Remove Box</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Plus size={12} />
+                                                                <span>Restore Box</span>
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                </div>
+
                                                 <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 space-y-2">
                                                     <div className="flex items-center justify-between">
                                                         <label className="text-[11px] font-bold text-slate-300">QR Code Size</label>
