@@ -1,84 +1,103 @@
 import { createAdminClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
+import { decryptCertificatePayload } from '@/lib/certificateCrypto'
 
 export async function GET(request: Request) {
     try {
         const url = new URL(request.url)
+        const token = url.searchParams.get('token')
         const code = url.searchParams.get('id') || url.searchParams.get('code')
 
-        if (!code) {
-            return NextResponse.json({ error: 'Certificate code is required' }, { status: 400 })
-        }
+        // 1. PRIMARY TAMPER-PROOF AUTHENTICATION: Encrypted QR Token
+        if (token) {
+            const payload = decryptCertificatePayload(token)
 
-        const cleanCode = code.trim()
-        const supabase = await createAdminClient()
+            if (!payload) {
+                return NextResponse.json({
+                    success: false,
+                    verified: false,
+                    isTampered: true,
+                    error: 'Tampered or counterfeit credential. The cryptographic signature on this QR code is invalid or has been modified.'
+                }, { status: 400 })
+            }
 
-        const { data: cert, error } = await supabase
-            .from('certificates')
-            .select('*')
-            .ilike('certificate_code', cleanCode)
-            .maybeSingle()
+            const isNotEligible = payload.category === 'Not Eligible'
 
-        if (error && error.code !== 'PGRST205' && !error.message?.includes('does not exist')) {
-            console.error('Error querying certificate:', error)
-            return NextResponse.json({ error: 'Database lookup error' }, { status: 500 })
-        }
-
-        if (cert) {
-            const isNotEligible = cert.category === 'Not Eligible' || cert.eligible === false
             return NextResponse.json({
                 success: true,
                 verified: true,
+                isEncryptedToken: true,
                 certificate: {
-                    certificate_code: cert.certificate_code,
-                    name: cert.name,
-                    reg_no: cert.reg_no,
-                    dept: cert.dept || 'General Track',
-                    section: cert.section || '—',
-                    year: cert.year || '—',
-                    category: cert.category || 'Group 3',
+                    certificate_code: payload.id,
+                    name: payload.name,
+                    reg_no: payload.reg_no,
+                    dept: payload.dept || 'Engineering',
+                    section: payload.section || '—',
+                    year: payload.year || '—',
+                    category: payload.category || 'Group 3',
+                    team_name: payload.team_name || '',
                     is_not_eligible: isNotEligible,
-                    certificate_type: cert.template_name || (cert.metadata && cert.metadata.cert_type) || 'Participation',
-                    issue_date: cert.issue_date || cert.created_at,
+                    certificate_type: payload.type || 'Participation',
+                    issue_date: payload.issue_date || (payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString()),
                     verified_at: new Date().toISOString()
                 }
             })
         }
 
-        // Fallback: If DB table not yet created in Supabase SQL editor, check URL params
-        const paramName = url.searchParams.get('name')
-        const paramReg = url.searchParams.get('reg_no')
-        if (paramName && paramReg) {
-            const paramCat = url.searchParams.get('cat') || 'Group 3'
-            const isNotEligible = paramCat === 'Not Eligible'
+        // 2. SECONDARY AUTHENTICATION: Database Certificate Code Lookup (Manual Search Bar)
+        if (code) {
+            const cleanCode = code.trim()
+            const supabase = await createAdminClient()
+
+            const { data: cert, error } = await supabase
+                .from('certificates')
+                .select('*')
+                .ilike('certificate_code', cleanCode)
+                .maybeSingle()
+
+            if (error && error.code !== 'PGRST205' && !error.message?.includes('does not exist')) {
+                console.error('Error querying certificate:', error)
+                return NextResponse.json({ error: 'Database lookup error' }, { status: 500 })
+            }
+
+            if (cert) {
+                const isNotEligible = cert.category === 'Not Eligible' || cert.eligible === false
+                return NextResponse.json({
+                    success: true,
+                    verified: true,
+                    isDatabaseRecord: true,
+                    certificate: {
+                        certificate_code: cert.certificate_code,
+                        name: cert.name,
+                        reg_no: cert.reg_no,
+                        dept: cert.dept || 'General Track',
+                        section: cert.section || '—',
+                        year: cert.year || '—',
+                        category: cert.category || 'Group 3',
+                        team_name: cert.team_name || '',
+                        is_not_eligible: isNotEligible,
+                        certificate_type: cert.template_name || (cert.metadata && cert.metadata.cert_type) || 'Participation',
+                        issue_date: cert.issue_date || cert.created_at,
+                        verified_at: new Date().toISOString()
+                    }
+                })
+            }
+
             return NextResponse.json({
-                success: true,
-                verified: true,
-                isParamFallback: true,
-                certificate: {
-                    certificate_code: cleanCode,
-                    name: paramName,
-                    reg_no: paramReg,
-                    dept: url.searchParams.get('dept') || 'Engineering',
-                    section: url.searchParams.get('sec') || 'A',
-                    year: url.searchParams.get('year') || '2026',
-                    category: paramCat,
-                    is_not_eligible: isNotEligible,
-                    certificate_type: url.searchParams.get('type') || 'Participation',
-                    issue_date: new Date().toISOString(),
-                    verified_at: new Date().toISOString()
-                }
-            })
+                success: false,
+                verified: false,
+                error: `Certificate ID "${cleanCode}" was not found in the official registry. Please ensure the code is correct, or scan the official encrypted QR code directly on the certificate.`
+            }, { status: 404 })
         }
 
         return NextResponse.json({
             success: false,
             verified: false,
-            error: 'Certificate with this identification code could not be verified in the registry.'
-        }, { status: 404 })
+            error: 'No certificate token or ID provided for authentication.'
+        }, { status: 400 })
 
     } catch (err: any) {
         console.error('Verify certificate error:', err)
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+        return NextResponse.json({ error: 'Internal verification server error' }, { status: 500 })
     }
 }

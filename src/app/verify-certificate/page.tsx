@@ -22,6 +22,7 @@ import {
 
 function VerificationContent() {
     const searchParams = useSearchParams()
+    const queryToken = searchParams.get('token') || ''
     const queryId = searchParams.get('id') || searchParams.get('code') || ''
 
     const [certificateId, setCertificateId] = useState(queryId)
@@ -31,25 +32,41 @@ function VerificationContent() {
     const [copied, setCopied] = useState(false)
 
     useEffect(() => {
-        if (queryId) {
-            verifyCode(queryId)
+        if (queryToken) {
+            verifyWithParams({ token: queryToken })
+        } else if (queryId) {
+            verifyWithParams({ id: queryId })
         }
-    }, [queryId])
+    }, [queryToken, queryId])
 
-    const verifyCode = async (codeToVerify: string) => {
-        if (!codeToVerify.trim()) return
+    const verifyWithParams = async (params: { token?: string; id?: string }) => {
         setLoading(true)
         setError(null)
         setResult(null)
 
         try {
-            // Forward URL query parameters if present (for fallback decoding)
-            const forwardParams = searchParams.toString()
-            const res = await fetch(`/api/verify-certificate?${forwardParams ? forwardParams : `id=${encodeURIComponent(codeToVerify.trim())}`}`)
+            let endpoint = '/api/verify-certificate'
+            if (params.token) {
+                endpoint += `?token=${encodeURIComponent(params.token)}`
+            } else if (params.id) {
+                endpoint += `?id=${encodeURIComponent(params.id.trim())}`
+            } else {
+                setLoading(false)
+                return
+            }
+
+            const res = await fetch(endpoint)
             const data = await res.json()
 
             if (res.ok && data.verified) {
-                setResult(data.certificate)
+                setResult({
+                    ...data.certificate,
+                    isEncryptedToken: data.isEncryptedToken,
+                    isDatabaseRecord: data.isDatabaseRecord
+                })
+                if (data.certificate?.certificate_code) {
+                    setCertificateId(data.certificate.certificate_code)
+                }
             } else {
                 setError(data.error || 'This certificate could not be authenticated in the official registry.')
             }
@@ -64,7 +81,7 @@ function VerificationContent() {
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault()
         if (certificateId.trim()) {
-            verifyCode(certificateId.trim())
+            verifyWithParams({ id: certificateId.trim() })
         }
     }
 
@@ -192,6 +209,12 @@ function VerificationContent() {
                                     </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
+                                    {/* Cryptographic Tamper-Proof Badge */}
+                                    <span className="px-3 py-1.5 rounded-xl text-xs font-bold tracking-wide border bg-emerald-50 text-emerald-800 border-emerald-200 flex items-center gap-1.5 shadow-sm">
+                                        <ShieldCheck size={14} className="text-emerald-600" />
+                                        <span>Tamper-Proof Authenticated</span>
+                                    </span>
+
                                     {/* Award / Tier Distinction Badge */}
                                     <span className="px-3 py-1.5 rounded-xl text-xs font-bold tracking-wide uppercase border bg-blue-50 text-blue-800 border-blue-200 flex items-center gap-1.5">
                                         <span>{result.certificate_type || 'Participation'}</span>

@@ -184,6 +184,8 @@ export interface PreviewModalData {
     totalStudents: number
     studentsList: ParticipantRecord[]
     activeTier: string
+    certCode?: string
+    token?: string
 }
 
 interface LayoutConfig {
@@ -1455,6 +1457,46 @@ export default function OrganizerCertificatesPage() {
 
 
 
+    // Cryptographically sign certificate payloads for tamper-proof QR codes
+    const requestCertificateTokens = async (items: Array<{
+        id: string
+        name: string
+        reg_no: string
+        dept?: string
+        section?: string
+        year?: string
+        category?: string
+        team_name?: string
+        type: string
+        issue_date?: string
+    }>): Promise<string[]> => {
+        if (!items || items.length === 0) return []
+        try {
+            const batchSize = 500
+            const allTokens: string[] = []
+            for (let i = 0; i < items.length; i += batchSize) {
+                const chunk = items.slice(i, i + batchSize)
+                const res = await fetch('/api/organizer/sign-certificates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ certificates: chunk })
+                })
+                if (!res.ok) {
+                    console.error('Sign certificates failed:', await res.text())
+                    return []
+                }
+                const data = await res.json()
+                if (Array.isArray(data.tokens)) {
+                    allTokens.push(...data.tokens)
+                }
+            }
+            return allTokens
+        } catch (err) {
+            console.error('Error requesting certificate tokens:', err)
+            return []
+        }
+    }
+
     // =========================================================================
     // 4. BATCH GENERATION & EXPORT
     // =========================================================================
@@ -1472,7 +1514,7 @@ export default function OrganizerCertificatesPage() {
         }
 
         setGenerating(true)
-        setProgress({ current: 0, total: selected.length, message: 'Initializing generator...' })
+        setProgress({ current: 0, total: selected.length, message: 'Cryptographically signing certificates...' })
 
         const width = templateDimensions.width || 1920
         const height = templateDimensions.height || 1080
@@ -1491,22 +1533,45 @@ export default function OrganizerCertificatesPage() {
         const certificatesToPersist: any[] = []
 
         try {
+            const signingItems = selected.map(p => {
+                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
+                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
+                const certCode = `GDG-KARE-${randA}-${randB}`
+                return {
+                    certCode,
+                    item: {
+                        id: certCode,
+                        name: p.name,
+                        reg_no: p.reg_no,
+                        dept: p.dept,
+                        section: p.section,
+                        year: p.year,
+                        category: p.category,
+                        team_name: p.team_name,
+                        type: selectedCertType,
+                        issue_date: new Date().toISOString()
+                    }
+                }
+            })
+
+            const tokens = await requestCertificateTokens(signingItems.map(s => s.item))
+
             for (let i = 0; i < selected.length; i++) {
                 const p = selected[i]
+                const certCode = signingItems[i].certCode
+                const token = tokens[i]
+
                 setProgress({
                     current: i + 1,
                     total: selected.length,
                     message: `Generating certificate for ${p.name} (${p.reg_no})...`
                 })
 
-                // Generate Unique ID: GDG-KARE-XXXX-YYYY
-                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const certCode = `GDG-KARE-${randA}-${randB}`
-
-                // Verification URL
+                // Tamper-proof Verification URL
                 const origin = typeof window !== 'undefined' ? window.location.origin : ''
-                const verifyUrl = `${origin}/verify-certificate?id=${certCode}&name=${encodeURIComponent(p.name)}&reg_no=${encodeURIComponent(p.reg_no)}&dept=${encodeURIComponent(p.dept)}&sec=${encodeURIComponent(p.section)}&year=${encodeURIComponent(p.year)}&cat=${encodeURIComponent(p.category)}&type=${encodeURIComponent(selectedCertType)}`
+                const verifyUrl = token
+                    ? `${origin}/verify-certificate?token=${encodeURIComponent(token)}`
+                    : `${origin}/verify-certificate?id=${certCode}`
 
                 // 1. Draw Template
                 ctx.clearRect(0, 0, width, height)
@@ -1717,6 +1782,33 @@ export default function OrganizerCertificatesPage() {
                 tierAssets.set(t, await getOrLoadTierTemplateImage(t))
             }
 
+            // Cryptographically sign tokens for all participants
+            setProgress({ current: 0, total: targets.length, message: 'Signing cryptographic verification tokens...' })
+            const signingItems = targets.map(p => {
+                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
+                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
+                const certCode = `GDG-KARE-${randA}-${randB}`
+                const tierId = getParticipantAwardTier(p)
+                return {
+                    certCode,
+                    tierId,
+                    item: {
+                        id: certCode,
+                        name: p.name,
+                        reg_no: p.reg_no,
+                        dept: p.dept,
+                        section: p.section,
+                        year: p.year,
+                        category: p.category,
+                        team_name: p.team_name,
+                        type: tierId,
+                        issue_date: new Date().toISOString()
+                    }
+                }
+            })
+
+            const tokens = await requestCertificateTokens(signingItems.map(s => s.item))
+
             const results: { participant: ParticipantRecord; certCode: string; canvasDataUrl: string; tier: string }[] = []
             const certificatesToPersist: any[] = []
 
@@ -1726,7 +1818,9 @@ export default function OrganizerCertificatesPage() {
 
             for (let i = 0; i < targets.length; i++) {
                 const p = targets[i]
-                const tierId = getParticipantAwardTier(p)
+                const tierId = signingItems[i].tierId
+                const certCode = signingItems[i].certCode
+                const token = tokens[i]
                 const asset = tierAssets.get(tierId)!
                 const tLayout = asset.layout
 
@@ -1742,12 +1836,10 @@ export default function OrganizerCertificatesPage() {
                     message: `Generating ${tierId} for ${p.name} (${i + 1}/${targets.length})...`
                 })
 
-                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const certCode = `GDG-KARE-${randA}-${randB}`
-
                 const origin = typeof window !== 'undefined' ? window.location.origin : ''
-                const verifyUrl = `${origin}/verify-certificate?id=${certCode}&name=${encodeURIComponent(p.name)}&reg_no=${encodeURIComponent(p.reg_no)}&dept=${encodeURIComponent(p.dept)}&sec=${encodeURIComponent(p.section)}&year=${encodeURIComponent(p.year)}&cat=${encodeURIComponent(p.category)}&type=${encodeURIComponent(tierId)}`
+                const verifyUrl = token
+                    ? `${origin}/verify-certificate?token=${encodeURIComponent(token)}`
+                    : `${origin}/verify-certificate?id=${certCode}`
 
                 // 1. Template
                 ctx.clearRect(0, 0, asset.width, asset.height)
@@ -1899,7 +1991,9 @@ export default function OrganizerCertificatesPage() {
         tierId: string,
         format: 'png' | 'jpeg' = 'jpeg',
         quality = 0.88,
-        customLayout?: LayoutConfig
+        customLayout?: LayoutConfig,
+        customCertCode?: string,
+        token?: string
     ): Promise<string> => {
         const asset = await getOrLoadTierTemplateImage(tierId)
         const tLayout = customLayout || asset.layout
@@ -1910,12 +2004,33 @@ export default function OrganizerCertificatesPage() {
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('Could not create canvas context')
 
-        const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-        const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-        const certCode = `GDG-KARE-${randA}-${randB}`
+        const certCode = customCertCode || (() => {
+            const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
+            const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
+            return `GDG-KARE-${randA}-${randB}`
+        })()
+
+        let certToken = token
+        if (!certToken) {
+            const tokens = await requestCertificateTokens([{
+                id: certCode,
+                name: participant.name,
+                reg_no: participant.reg_no,
+                dept: participant.dept,
+                section: participant.section,
+                year: participant.year,
+                category: participant.category,
+                team_name: participant.team_name,
+                type: tierId,
+                issue_date: new Date().toISOString()
+            }])
+            if (tokens.length > 0) certToken = tokens[0]
+        }
 
         const origin = typeof window !== 'undefined' ? window.location.origin : ''
-        const verifyUrl = `${origin}/verify-certificate?id=${certCode}&name=${encodeURIComponent(participant.name)}&reg_no=${encodeURIComponent(participant.reg_no)}&dept=${encodeURIComponent(participant.dept)}&sec=${encodeURIComponent(participant.section)}&year=${encodeURIComponent(participant.year)}&cat=${encodeURIComponent(participant.category)}&type=${encodeURIComponent(tierId)}`
+        const verifyUrl = certToken
+            ? `${origin}/verify-certificate?token=${encodeURIComponent(certToken)}`
+            : `${origin}/verify-certificate?id=${certCode}`
 
         // 1. Template Image
         ctx.clearRect(0, 0, asset.width, asset.height)
@@ -1969,8 +2084,10 @@ export default function OrganizerCertificatesPage() {
         tierId: string,
         format: 'png' | 'jpeg' = 'png',
         quality = 0.95,
-        customLayout?: LayoutConfig
-    ): Promise<{ blob: Blob; width: number; height: number }> => {
+        customLayout?: LayoutConfig,
+        customCertCode?: string,
+        token?: string
+    ): Promise<{ blob: Blob; width: number; height: number; certCode: string }> => {
         const asset = await getOrLoadTierTemplateImage(tierId)
         const tLayout = customLayout || asset.layout
 
@@ -1980,12 +2097,33 @@ export default function OrganizerCertificatesPage() {
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('Could not create canvas context')
 
-        const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-        const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-        const certCode = `GDG-KARE-${randA}-${randB}`
+        const certCode = customCertCode || (() => {
+            const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
+            const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
+            return `GDG-KARE-${randA}-${randB}`
+        })()
+
+        let certToken = token
+        if (!certToken) {
+            const tokens = await requestCertificateTokens([{
+                id: certCode,
+                name: participant.name,
+                reg_no: participant.reg_no,
+                dept: participant.dept,
+                section: participant.section,
+                year: participant.year,
+                category: participant.category,
+                team_name: participant.team_name,
+                type: tierId,
+                issue_date: new Date().toISOString()
+            }])
+            if (tokens.length > 0) certToken = tokens[0]
+        }
 
         const origin = typeof window !== 'undefined' ? window.location.origin : ''
-        const verifyUrl = `${origin}/verify-certificate?id=${certCode}&name=${encodeURIComponent(participant.name)}&reg_no=${encodeURIComponent(participant.reg_no)}&dept=${encodeURIComponent(participant.dept)}&sec=${encodeURIComponent(participant.section)}&year=${encodeURIComponent(participant.year)}&cat=${encodeURIComponent(participant.category)}&type=${encodeURIComponent(tierId)}`
+        const verifyUrl = certToken
+            ? `${origin}/verify-certificate?token=${encodeURIComponent(certToken)}`
+            : `${origin}/verify-certificate?id=${certCode}`
 
         // Draw Template
         ctx.drawImage(asset.img, 0, 0, asset.width, asset.height)
@@ -2030,7 +2168,7 @@ export default function OrganizerCertificatesPage() {
 
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
         const blob = await canvasToBlob(canvas, mime, quality)
-        return { blob, width: asset.width, height: asset.height }
+        return { blob, width: asset.width, height: asset.height, certCode }
     }
 
     // Open Interactive Category Certificate Preview Modal
@@ -2077,7 +2215,25 @@ export default function OrganizerCertificatesPage() {
         setGeneratingPreview(true)
 
         try {
-            const dataUrl = await renderSingleCertificateDataUrl(currentStudent, tierId, 'png', 0.95, tierLayout)
+            const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
+            const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
+            const certCode = `GDG-KARE-${randA}-${randB}`
+
+            const tokens = await requestCertificateTokens([{
+                id: certCode,
+                name: currentStudent.name,
+                reg_no: currentStudent.reg_no,
+                dept: currentStudent.dept,
+                section: currentStudent.section,
+                year: currentStudent.year,
+                category: currentStudent.category,
+                team_name: currentStudent.team_name,
+                type: tierId,
+                issue_date: new Date().toISOString()
+            }])
+            const token = tokens[0] || ''
+
+            const dataUrl = await renderSingleCertificateDataUrl(currentStudent, tierId, 'png', 0.95, tierLayout, certCode, token)
 
             setPreviewModal({
                 isOpen: true,
@@ -2087,7 +2243,9 @@ export default function OrganizerCertificatesPage() {
                 sampleIndex: validIndex,
                 totalStudents: targets.length,
                 studentsList: targets,
-                activeTier: tierId
+                activeTier: tierId,
+                certCode,
+                token
             })
         } catch (err: any) {
             console.error('Failed to generate category preview:', err)
@@ -2111,7 +2269,9 @@ export default function OrganizerCertificatesPage() {
                 activeTier,
                 'png',
                 0.95,
-                newLayout
+                newLayout,
+                previewModal.certCode,
+                previewModal.token
             )
             setPreviewModal(prev => prev ? ({ ...prev, canvasDataUrl: newUrl }) : null)
         } catch (err) {
@@ -2215,17 +2375,54 @@ export default function OrganizerCertificatesPage() {
                 await getOrLoadTierTemplateImage(t)
             }
 
+            // Cryptographically sign tokens for all targets up front
+            setDownloadProgress({
+                isOpen: true,
+                current: 0,
+                total: targets.length,
+                percent: 5,
+                stage: `Signing cryptographic tokens for ${targets.length} certificate(s)...`,
+                categoryLabel: cat.label
+            })
+
+            const signingItems = targets.map(p => {
+                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
+                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
+                const certCode = `GDG-KARE-${randA}-${randB}`
+                const tierId = getParticipantAwardTier(p)
+                return {
+                    certCode,
+                    tierId,
+                    item: {
+                        id: certCode,
+                        name: p.name,
+                        reg_no: p.reg_no,
+                        dept: p.dept,
+                        section: p.section,
+                        year: p.year,
+                        category: p.category,
+                        team_name: p.team_name,
+                        type: tierId,
+                        issue_date: new Date().toISOString()
+                    }
+                }
+            })
+
+            const tokens = await requestCertificateTokens(signingItems.map(s => s.item))
+
             const cleanCatName = cat.label.replace(/[^a-zA-Z0-9]/g, '_')
 
             // Single student download directly without zipping
             if (targets.length === 1) {
                 const p = targets[0]
-                const tierId = getParticipantAwardTier(p)
+                const tierId = signingItems[0].tierId
+                const certCode = signingItems[0].certCode
+                const token = tokens[0]
                 const cleanName = (p.name || 'Participant').replace(/[^a-zA-Z0-9]/g, '_')
                 const cleanReg = (p.reg_no || 'P1').replace(/[^a-zA-Z0-9]/g, '_')
                 const cleanTier = tierId.replace(/[^a-zA-Z0-9]/g, '_')
 
-                const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95)
+                const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95, undefined, certCode, token)
                 triggerFileDownload(blob, `Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`)
                 showToast('success', `Downloaded PNG certificate for ${p.name}!`)
                 return
@@ -2236,7 +2433,9 @@ export default function OrganizerCertificatesPage() {
 
             for (let i = 0; i < targets.length; i++) {
                 const p = targets[i]
-                const tierId = getParticipantAwardTier(p)
+                const tierId = signingItems[i].tierId
+                const certCode = signingItems[i].certCode
+                const token = tokens[i]
 
                 // Critical: Yield to event loop every single certificate so UI never freezes!
                 await sleep(4)
@@ -2254,7 +2453,7 @@ export default function OrganizerCertificatesPage() {
                 const cleanReg = (p.reg_no || `P${i + 1}`).replace(/[^a-zA-Z0-9]/g, '_')
                 const cleanTier = tierId.replace(/[^a-zA-Z0-9]/g, '_')
 
-                const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95)
+                const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95, undefined, certCode, token)
                 zip.file(`Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`, blob)
             }
 
@@ -4656,7 +4855,7 @@ export default function OrganizerCertificatesPage() {
                                     type="button"
                                     onClick={() => downloadSingle({
                                         participant: previewModal.previewParticipant,
-                                        certCode: 'CERT-PREV',
+                                        certCode: previewModal.certCode || 'CERT-PREV',
                                         canvasDataUrl: previewModal.canvasDataUrl,
                                         tier: previewModal.activeTier || getParticipantAwardTier(previewModal.previewParticipant)
                                     })}
