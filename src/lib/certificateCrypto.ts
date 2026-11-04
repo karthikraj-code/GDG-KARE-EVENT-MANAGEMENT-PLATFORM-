@@ -10,6 +10,7 @@ export interface CertificatePayload {
     category?: string
     team_name?: string
     type: string
+    event_name?: string
     issue_date?: string
     iat?: number
 }

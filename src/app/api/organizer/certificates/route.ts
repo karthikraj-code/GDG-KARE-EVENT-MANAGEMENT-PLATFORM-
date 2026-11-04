@@ -106,8 +106,10 @@ export async function POST(request: Request) {
             template_name: c.template_name || 'Standard Certificate',
             award_tier: c.award_tier || c.template_name || 'Participation',
             winner_rank: c.winner_rank ?? null,
+            event_name: c.event_name || 'GDG-KARE Event Management Platform',
             metadata: {
                 ...(c.metadata || {}),
+                event_name: c.event_name || 'GDG-KARE Event Management Platform',
                 team_name: c.team_name,
                 award_tier: c.award_tier || c.template_name,
                 winner_rank: c.winner_rank
@@ -172,10 +174,10 @@ export async function POST(request: Request) {
             .upsert(normalized, { onConflict: 'certificate_code' })
             .select()
 
-        // If newly added columns (team_name, award_tier, winner_rank) do not exist yet in DB,
+        // If newly added columns (event_name, team_name, award_tier, winner_rank) do not exist yet in DB,
         // retry gracefully without them while keeping them in metadata JSONB
-        if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('team_name'))) {
-            const stripped = normalized.map(({ team_name, award_tier, winner_rank, ...rest }) => rest)
+        if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('team_name') || error.message?.includes('event_name'))) {
+            const stripped = normalized.map(({ event_name, team_name, award_tier, winner_rank, ...rest }) => rest)
             const fallbackRes = await supabase
                 .from('certificates')
                 .upsert(stripped, { onConflict: 'certificate_code' })

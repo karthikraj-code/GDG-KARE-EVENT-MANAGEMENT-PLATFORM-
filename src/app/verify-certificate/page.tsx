@@ -209,6 +209,12 @@ function VerificationContent() {
                                     </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
+                                    {/* Event Name Badge */}
+                                    <span className="px-3 py-1.5 rounded-xl text-xs font-bold tracking-wide border bg-purple-50 text-purple-800 border-purple-200 flex items-center gap-1.5 shadow-xs">
+                                        <Award size={14} className="text-purple-600" />
+                                        <span>{result.event_name || 'GDG-KARE Event'}</span>
+                                    </span>
+
                                     {/* Cryptographic Tamper-Proof Badge */}
                                     <span className="px-3 py-1.5 rounded-xl text-xs font-bold tracking-wide border bg-emerald-50 text-emerald-800 border-emerald-200 flex items-center gap-1.5 shadow-sm">
                                         <ShieldCheck size={14} className="text-emerald-600" />
@@ -248,7 +254,13 @@ function VerificationContent() {
 
                             {/* Certificate Recipient Hero */}
                             <div className="my-8 text-center sm:text-left bg-gray-50 border border-gray-200 rounded-2xl p-6">
-                                <span className="text-xs font-medium uppercase tracking-wider text-gray-500">Awarded To</span>
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                    <span className="text-xs font-bold uppercase tracking-wider text-purple-700 bg-purple-100/70 border border-purple-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1.5 shadow-xs">
+                                        <Award size={12} className="text-purple-600" />
+                                        <span>{result.event_name || 'GDG-KARE Event'}</span>
+                                    </span>
+                                    <span className="text-xs font-medium uppercase tracking-wider text-gray-500">Official Recipient</span>
+                                </div>
                                 <h2 className="text-2xl sm:text-3xl font-extrabold text-black mt-1 tracking-tight">
                                     {result.name}
                                 </h2>
@@ -271,6 +283,17 @@ function VerificationContent() {
 
                             {/* Verified Credential Details Grid */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 my-6">
+                                {/* Official Event Name */}
+                                <div className="bg-white border border-gray-200 rounded-2xl p-4 flex items-start gap-3 sm:col-span-2">
+                                    <div className="p-2.5 rounded-xl bg-purple-50 text-purple-600 shrink-0">
+                                        <Award size={18} />
+                                    </div>
+                                    <div>
+                                        <span className="text-[11px] text-gray-500 font-medium uppercase tracking-wider block">Official Event</span>
+                                        <span className="text-sm font-bold text-black">{result.event_name || 'GDG-KARE Event Management Platform'}</span>
+                                    </div>
+                                </div>
+
                                 {/* Department */}
                                 <div className="bg-white border border-gray-200 rounded-2xl p-4 flex items-start gap-3">
                                     <div className="p-2.5 rounded-xl bg-blue-50 text-blue-600">

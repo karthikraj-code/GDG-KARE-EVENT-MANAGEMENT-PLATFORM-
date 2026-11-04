@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
     Award,
     Upload,
@@ -35,7 +35,8 @@ import {
     Save,
     Plus,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    Edit3
 } from 'lucide-react'
 import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
@@ -453,11 +454,35 @@ export default function OrganizerCertificatesPage() {
 
     // Data Source: 'db' | 'excel'
     const [dataSource, setDataSource] = useState<'db' | 'excel'>('db')
-    const [participants, setParticipants] = useState<ParticipantRecord[]>([])
     const [dbParticipantsList, setDbParticipantsList] = useState<ParticipantRecord[]>([])
     const [excelParticipantsList, setExcelParticipantsList] = useState<ParticipantRecord[]>([])
     const [excelFileName, setExcelFileName] = useState<string>('')
     const [loadingParticipants, setLoadingParticipants] = useState(false)
+
+    // Event Names for DB mode and Excel mode
+    const [dbEventName, setDbEventName] = useState<string>('GDG-KARE Event Management Platform')
+    const [excelEventName, setExcelEventName] = useState<string>('GDG-KARE Event')
+    const [isEditingDbEvent, setIsEditingDbEvent] = useState<boolean>(false)
+    const [tempDbEventName, setTempDbEventName] = useState<string>('GDG-KARE Event Management Platform')
+
+    const activeEventName = useMemo(() => {
+        return dataSource === 'db' ? (dbEventName.trim() || 'GDG-KARE Event Management Platform') : (excelEventName.trim() || 'GDG-KARE Event')
+    }, [dataSource, dbEventName, excelEventName])
+
+    // Active participants dynamically bound to the selected data source (DB vs Excel)
+    // Ensures moving between Excel and DB immediately and strictly switches the participant dataset
+    const participants = useMemo(() => {
+        return dataSource === 'db' ? dbParticipantsList : excelParticipantsList
+    }, [dataSource, dbParticipantsList, excelParticipantsList])
+
+    // Unified setter that automatically routes updates to the active data source
+    const setParticipants = useCallback((updater: ParticipantRecord[] | ((prev: ParticipantRecord[]) => ParticipantRecord[])) => {
+        if (dataSource === 'db') {
+            setDbParticipantsList(updater)
+        } else {
+            setExcelParticipantsList(updater)
+        }
+    }, [dataSource])
     // Certificate Tier / Batch Mode
     const [selectedCertType, setSelectedCertType] = useState<CertificateType>('Participation')
     const [templateStore, setTemplateStore] = useState<Record<string, TierTemplateData>>({})
@@ -466,9 +491,20 @@ export default function OrganizerCertificatesPage() {
     const [teamFilter, setTeamFilter] = useState<string>('All')
     const [historyTypeFilter, setHistoryTypeFilter] = useState<string>('All')
 
-    // Winning Teams Configuration & Dynamic Tiers
-    const [winnerCount, setWinnerCount] = useState<number>(3)
-    const [winningTeams, setWinningTeams] = useState<string[]>(['', '', ''])
+    // Winning Teams Configuration & Dynamic Tiers (Separated for DB vs Excel)
+    const [dbWinnerCount, setDbWinnerCount] = useState<number>(3)
+    const [dbWinningTeams, setDbWinningTeams] = useState<string[]>(['', '', ''])
+    const [excelWinnerCount, setExcelWinnerCount] = useState<number>(3)
+    const [excelWinningTeams, setExcelWinningTeams] = useState<string[]>(['', '', ''])
+
+    // Dynamically derive active winning teams and count based on dataSource
+    const winningTeams = useMemo(() => {
+        return dataSource === 'db' ? dbWinningTeams : excelWinningTeams
+    }, [dataSource, dbWinningTeams, excelWinningTeams])
+
+    const winnerCount = useMemo(() => {
+        return dataSource === 'db' ? dbWinnerCount : excelWinnerCount
+    }, [dataSource, dbWinnerCount, excelWinnerCount])
 
     const availableTiers = useMemo(() => {
         const list: CertificateTierInfo[] = [PARTICIPATION_TIER]
@@ -569,29 +605,54 @@ export default function OrganizerCertificatesPage() {
 
     const handleWinnerCountChange = (count: number) => {
         const clamped = Math.max(1, Math.min(25, count))
-        setWinnerCount(clamped)
-        setWinningTeams(prev => {
-            const next = [...prev]
-            while (next.length < clamped) next.push('')
-            const trimmed = next.slice(0, clamped)
-            try {
-                localStorage.setItem('hackare_winner_count', String(clamped))
-                localStorage.setItem('hackare_winning_teams', JSON.stringify(trimmed))
-            } catch { }
-            return trimmed
-        })
+        if (dataSource === 'db') {
+            setDbWinnerCount(clamped)
+            setDbWinningTeams(prev => {
+                const next = [...prev]
+                while (next.length < clamped) next.push('')
+                const trimmed = next.slice(0, clamped)
+                try {
+                    localStorage.setItem('hackare_db_winner_count', String(clamped))
+                    localStorage.setItem('hackare_db_winning_teams', JSON.stringify(trimmed))
+                } catch { }
+                return trimmed
+            })
+        } else {
+            setExcelWinnerCount(clamped)
+            setExcelWinningTeams(prev => {
+                const next = [...prev]
+                while (next.length < clamped) next.push('')
+                const trimmed = next.slice(0, clamped)
+                try {
+                    localStorage.setItem('hackare_excel_winner_count', String(clamped))
+                    localStorage.setItem('hackare_excel_winning_teams', JSON.stringify(trimmed))
+                } catch { }
+                return trimmed
+            })
+        }
         showToast('info', `Configured for ${clamped} winning teams.`)
     }
 
     const updateWinningTeam = (rankIndex: number, teamName: string) => {
-        setWinningTeams(prev => {
-            const next = [...prev]
-            next[rankIndex] = teamName
-            try {
-                localStorage.setItem('hackare_winning_teams', JSON.stringify(next))
-            } catch { }
-            return next
-        })
+        if (dataSource === 'db') {
+            setDbWinningTeams(prev => {
+                const next = [...prev]
+                next[rankIndex] = teamName
+                try {
+                    localStorage.setItem('hackare_db_winning_teams', JSON.stringify(next))
+                } catch { }
+                return next
+            })
+        } else {
+            setExcelWinningTeams(prev => {
+                const next = [...prev]
+                next[rankIndex] = teamName
+                try {
+                    localStorage.setItem('hackare_excel_winning_teams', JSON.stringify(next))
+                } catch { }
+                return next
+            })
+        }
         if (teamName) {
             showToast('success', `Assigned ${teamName} as ${getOrdinal(rankIndex + 1)} Place Winner!`)
         }
@@ -746,15 +807,16 @@ export default function OrganizerCertificatesPage() {
     const certCodeCacheRef = useRef<Map<string, string>>(new Map())
 
     /**
-     * Deterministic hash generation for offline / Excel participants.
-     * Ensures that even if session cache, browser cache, and cookies are cleared,
-     * the exact same participant (by reg_no / identifier) will mathematically produce
-     * the identical GDG-KARE-XXXX-YYYY certificate code every time.
+     * Deterministic hash generation for offline / Excel participants vs DB participants.
+     * Uses different prime seeds and salts for DB vs Excel so that even if a student
+     * has the exact same reg_no/details in both DB and an Excel sheet, their unique IDs
+     * are strictly distinct and never collide!
      */
-    const generateDeterministicCertCode = (identifier: string, tier: string = ''): string => {
-        const input = `${identifier.trim().toUpperCase()}::${tier.trim().toUpperCase()}::GDG_KARE_EVENT_2026`
-        let h1 = 0xdeadbeef
-        let h2 = 0x41c6ce57
+    const generateDeterministicCertCode = (identifier: string, tier: string = '', source: 'db' | 'excel' = 'db'): string => {
+        const salt = source === 'excel' ? 'GDG_KARE_EXCEL_SPREADSHEET_2026' : 'GDG_KARE_DATABASE_STUDENT_2026'
+        const input = `${identifier.trim().toUpperCase()}::${tier.trim().toUpperCase()}::${salt}`
+        let h1 = source === 'excel' ? 0xcafebabe : 0xdeadbeef
+        let h2 = source === 'excel' ? 0x8badf00d : 0x41c6ce57
         for (let i = 0; i < input.length; i++) {
             const ch = input.charCodeAt(i)
             h1 = Math.imul(h1 ^ ch, 2654435761)
@@ -769,17 +831,17 @@ export default function OrganizerCertificatesPage() {
     }
 
     /**
-     * Resolves the permanent unique certificate code for a participant with 5 resilient tiers:
-     * 1. Reuses existing certificate_code from Supabase DB (issuedCertificates) if registered.
-     * 2. Reuses in-memory session code if already assigned.
-     * 3. Reuses persistent browser localStorage code (survives tab closure & browser restart).
-     * 4. Checks if participant record already carries an assigned certificate_code.
-     * 5. Deterministic Algorithmic Fallback: Computes permanent code from student reg_no/ID
-     *    so that even if cache is completely wiped, the same student always gets the identical code.
+     * Resolves the permanent unique certificate code for a participant with complete DB vs Excel isolation:
+     * - DB participants: Check Supabase DB (issuedCertificates), DB session cache, DB localStorage.
+     * - Excel participants: Check Excel column, Excel session cache, Excel localStorage.
+     *   NEVER checks DB, and never shares keys with DB participants!
      */
     const getExistingOrNewCertCode = (p?: ParticipantRecord | null, tier?: string): string => {
+        const isExcel = p?.id?.startsWith('excel_') || dataSource === 'excel'
+        const source: 'db' | 'excel' = isExcel ? 'excel' : 'db'
+
         if (!p) {
-            return generateDeterministicCertCode('PREVIEW_SAMPLE', tier || 'sample')
+            return generateDeterministicCertCode('PREVIEW_SAMPLE', tier || 'sample', source)
         }
 
         const cleanReg = (p.reg_no || '').trim().toLowerCase()
@@ -787,39 +849,42 @@ export default function OrganizerCertificatesPage() {
         const cleanName = (p.name || '').trim().toLowerCase()
         const targetTier = (tier || '').trim().toLowerCase()
 
-        const specificKey = `${cleanReg || cleanId || cleanName}_${targetTier}`
-        const generalKey = `${cleanReg || cleanId || cleanName}`
+        // Namespaced keys guarantee 100% isolation between DB and Excel participants
+        const specificKey = `${source}:${cleanReg || cleanId || cleanName}_${targetTier}`
+        const generalKey = `${source}:${cleanReg || cleanId || cleanName}`
 
-        // 1. Check existing DB certificates
-        if (issuedCertificates && issuedCertificates.length > 0) {
-            // First try matching both student AND exact tier
-            const exactDbMatch = issuedCertificates.find(c => {
-                const cReg = (c.reg_no || '').trim().toLowerCase()
-                const cId = (c.user_id || c.id || '').trim().toLowerCase()
-                const cTier = (c.award_tier || c.template_name || '').trim().toLowerCase()
-                const isStudent = (cleanReg && cReg === cleanReg) || (cleanId && cId === cleanId)
-                return isStudent && (!targetTier || cTier === targetTier)
-            })
+        if (!isExcel) {
+            // 1. Check existing DB certificates (STRICTLY FOR DB PARTICIPANTS ONLY!)
+            if (issuedCertificates && issuedCertificates.length > 0) {
+                // First try matching both student AND exact tier
+                const exactDbMatch = issuedCertificates.find(c => {
+                    const cReg = (c.reg_no || '').trim().toLowerCase()
+                    const cId = (c.user_id || c.id || '').trim().toLowerCase()
+                    const cTier = (c.award_tier || c.template_name || '').trim().toLowerCase()
+                    const isStudent = (cleanReg && cReg === cleanReg) || (cleanId && cId === cleanId)
+                    return isStudent && (!targetTier || cTier === targetTier)
+                })
 
-            if (exactDbMatch?.certificate_code) {
-                certCodeCacheRef.current.set(specificKey, exactDbMatch.certificate_code)
-                return exactDbMatch.certificate_code
-            }
+                if (exactDbMatch?.certificate_code) {
+                    certCodeCacheRef.current.set(specificKey, exactDbMatch.certificate_code)
+                    return exactDbMatch.certificate_code
+                }
 
-            // Fallback: Match student by reg_no or user_id regardless of tier
-            const studentDbMatch = issuedCertificates.find(c => {
-                const cReg = (c.reg_no || '').trim().toLowerCase()
-                const cId = (c.user_id || c.id || '').trim().toLowerCase()
-                return (cleanReg && cReg === cleanReg) || (cleanId && cId === cleanId)
-            })
+                // Fallback: Match student by reg_no or user_id regardless of tier
+                const studentDbMatch = issuedCertificates.find(c => {
+                    const cReg = (c.reg_no || '').trim().toLowerCase()
+                    const cId = (c.user_id || c.id || '').trim().toLowerCase()
+                    return (cleanReg && cReg === cleanReg) || (cleanId && cId === cleanId)
+                })
 
-            if (studentDbMatch?.certificate_code) {
-                certCodeCacheRef.current.set(specificKey, studentDbMatch.certificate_code)
-                return studentDbMatch.certificate_code
+                if (studentDbMatch?.certificate_code) {
+                    certCodeCacheRef.current.set(specificKey, studentDbMatch.certificate_code)
+                    return studentDbMatch.certificate_code
+                }
             }
         }
 
-        // 2. Check in-memory session cache
+        // 2. Check in-memory session cache (namespaced by source)
         if (certCodeCacheRef.current.has(specificKey)) {
             return certCodeCacheRef.current.get(specificKey)!
         }
@@ -830,7 +895,8 @@ export default function OrganizerCertificatesPage() {
         // 3. Check persistent browser localStorage (survives tab closure, browser restart)
         try {
             if (typeof window !== 'undefined' && window.localStorage) {
-                const stored = localStorage.getItem('hackare_cert_codes')
+                const storageKey = isExcel ? 'hackare_excel_cert_codes' : 'hackare_cert_codes'
+                const stored = localStorage.getItem(storageKey)
                 if (stored) {
                     const map = JSON.parse(stored)
                     if (map[specificKey]) {
@@ -845,29 +911,30 @@ export default function OrganizerCertificatesPage() {
             }
         } catch { }
 
-        // 4. Check if participant object carries an existing certificate_code
-        if ((p as any).certificate_code) {
-            const code = String((p as any).certificate_code)
+        // 4. Check if participant object carries an existing certificate_code (e.g. from Excel column)
+        if (p.certificate_code) {
+            const code = String(p.certificate_code)
             certCodeCacheRef.current.set(specificKey, code)
             return code
         }
 
         // 5. Deterministic Algorithmic Fallback:
-        // Even if all caches, localStorage, and session data are cleared,
-        // this participant's reg_no will mathematically generate the exact same code!
+        // Uses separate cryptographic seeds for DB vs Excel so duplicate student records
+        // will NEVER produce the same certificate ID across DB and Excel modes.
         const identifier = cleanReg || cleanId || cleanName || 'STUDENT'
-        const newCode = generateDeterministicCertCode(identifier, targetTier)
+        const newCode = generateDeterministicCertCode(identifier, targetTier, source)
 
         // Cache in memory and localStorage for instant lookup
         certCodeCacheRef.current.set(specificKey, newCode)
         certCodeCacheRef.current.set(generalKey, newCode)
         try {
             if (typeof window !== 'undefined' && window.localStorage) {
-                const stored = localStorage.getItem('hackare_cert_codes')
+                const storageKey = isExcel ? 'hackare_excel_cert_codes' : 'hackare_cert_codes'
+                const stored = localStorage.getItem(storageKey)
                 const map = stored ? JSON.parse(stored) : {}
                 map[specificKey] = newCode
                 map[generalKey] = newCode
-                localStorage.setItem('hackare_cert_codes', JSON.stringify(map))
+                localStorage.setItem(storageKey, JSON.stringify(map))
             }
         } catch { }
 
@@ -935,14 +1002,55 @@ export default function OrganizerCertificatesPage() {
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [])
 
+    // Fetch and synchronize DB winning teams from Supabase database
+    const syncWinningTeamsFromDb = useCallback(async () => {
+        try {
+            const res = await fetch('/api/organizer/winning-teams', { cache: 'no-store' })
+            if (res.ok) {
+                const data = await res.json()
+                if (data.winningTeams && Array.isArray(data.winningTeams)) {
+                    setDbWinningTeams(data.winningTeams)
+                    if (typeof data.winnerCount === 'number') {
+                        setDbWinnerCount(data.winnerCount)
+                    }
+                    try {
+                        localStorage.setItem('hackare_db_winner_count', String(data.winnerCount || 3))
+                        localStorage.setItem('hackare_db_winning_teams', JSON.stringify(data.winningTeams))
+                    } catch { }
+                    return
+                }
+            }
+        } catch (err) {
+            console.warn('Could not load winning teams from DB:', err)
+        }
+
+        // Fallback: Load saved DB winning teams and count from localStorage
+        try {
+            const savedCount = localStorage.getItem('hackare_db_winner_count') || localStorage.getItem('hackare_winner_count')
+            if (savedCount) {
+                const c = parseInt(savedCount, 10)
+                if (!isNaN(c) && c >= 1 && c <= 25) setDbWinnerCount(c)
+            }
+            const savedTeams = localStorage.getItem('hackare_db_winning_teams') || localStorage.getItem('hackare_winning_teams')
+            if (savedTeams) {
+                const parsed = JSON.parse(savedTeams)
+                if (Array.isArray(parsed)) setDbWinningTeams(parsed)
+            }
+        } catch { }
+    }, [])
+
     // Save Winning Teams to Database with Pop-up Message
     const saveWinningTeamsToDb = async () => {
+        if (dataSource === 'excel') {
+            showToast('info', 'Excel winning teams are kept in your local spreadsheet session.')
+            return
+        }
         setSavingWinningTeams(true)
         try {
             // 1. Immediately cache in localStorage
             try {
-                localStorage.setItem('hackare_winner_count', String(winnerCount))
-                localStorage.setItem('hackare_winning_teams', JSON.stringify(winningTeams))
+                localStorage.setItem('hackare_db_winner_count', String(dbWinnerCount))
+                localStorage.setItem('hackare_db_winning_teams', JSON.stringify(dbWinningTeams))
             } catch { }
 
             // 2. Persist to Supabase DB via PUT /api/organizer/winning-teams
@@ -950,8 +1058,8 @@ export default function OrganizerCertificatesPage() {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    winnerCount,
-                    winningTeams
+                    winnerCount: dbWinnerCount,
+                    winningTeams: dbWinningTeams
                 })
             })
 
@@ -963,8 +1071,8 @@ export default function OrganizerCertificatesPage() {
             // 3. Compile summary of winning teams for the pop-up modal
             const details: string[] = []
             let assignedCount = 0
-            for (let i = 0; i < winnerCount; i++) {
-                const team = (winningTeams[i] || '').trim()
+            for (let i = 0; i < dbWinnerCount; i++) {
+                const team = (dbWinningTeams[i] || '').trim()
                 const rank = i + 1
                 const ordinal = getOrdinal(rank)
                 const icon = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '🏆'
@@ -986,7 +1094,7 @@ export default function OrganizerCertificatesPage() {
                 type: 'success',
                 category: 'winners',
                 title: '🎉 Winning Teams Successfully Saved to Database!',
-                message: `Top ${winnerCount} winning teams configuration has been permanently synced to Supabase database ("teams" & "winning_teams" tables). ${assignedCount} of ${winnerCount} ranks configured.`,
+                message: `Top ${dbWinnerCount} winning teams configuration has been permanently synced to Supabase database ("teams" & "winning_teams" tables). ${assignedCount} of ${dbWinnerCount} ranks configured.`,
                 details: details,
                 extraNote: 'Certificates generated with "Smart Multi-Tier Batch" will automatically grant every student in these winning teams their official Winner certificate!'
             })
@@ -1030,47 +1138,35 @@ export default function OrganizerCertificatesPage() {
                     const parsed = JSON.parse(cachedDb)
                     if (Array.isArray(parsed) && parsed.length > 0) {
                         setDbParticipantsList(parsed)
-                        setParticipants(parsed)
                     }
                 }
             }
         } catch { }
 
+        // Load saved Excel winning teams & event name from localStorage if available
+        try {
+            const savedExcelCount = localStorage.getItem('hackare_excel_winner_count')
+            if (savedExcelCount) {
+                const c = parseInt(savedExcelCount, 10)
+                if (!isNaN(c) && c >= 1 && c <= 25) setExcelWinnerCount(c)
+            }
+            const savedExcelTeams = localStorage.getItem('hackare_excel_winning_teams')
+            if (savedExcelTeams) {
+                const parsed = JSON.parse(savedExcelTeams)
+                if (Array.isArray(parsed)) setExcelWinningTeams(parsed)
+            }
+            const savedExcelEvent = localStorage.getItem('hackare_excel_event_name')
+            if (savedExcelEvent) setExcelEventName(savedExcelEvent)
+
+            const savedDbEvent = localStorage.getItem('hackare_db_event_name')
+            if (savedDbEvent) {
+                setDbEventName(savedDbEvent)
+                setTempDbEventName(savedDbEvent)
+            }
+        } catch { }
+
         fetchDbParticipants()
         fetchIssuedCertificates()
-
-        // Sync winning teams from Supabase database
-        const syncWinningTeamsFromDb = async () => {
-            try {
-                const res = await fetch('/api/organizer/winning-teams')
-                if (res.ok) {
-                    const data = await res.json()
-                    if (data.winningTeams && Array.isArray(data.winningTeams)) {
-                        setWinningTeams(data.winningTeams)
-                        if (typeof data.winnerCount === 'number') {
-                            setWinnerCount(data.winnerCount)
-                        }
-                        return
-                    }
-                }
-            } catch (err) {
-                console.warn('Could not load winning teams from DB:', err)
-            }
-
-            // Fallback: Load saved winning teams and count from localStorage
-            try {
-                const savedCount = localStorage.getItem('hackare_winner_count')
-                if (savedCount) {
-                    const c = parseInt(savedCount, 10)
-                    if (!isNaN(c) && c >= 1 && c <= 25) setWinnerCount(c)
-                }
-                const savedTeams = localStorage.getItem('hackare_winning_teams')
-                if (savedTeams) {
-                    const parsed = JSON.parse(savedTeams)
-                    if (Array.isArray(parsed)) setWinningTeams(parsed)
-                }
-            } catch { }
-        }
         syncWinningTeamsFromDb()
 
         // Load all saved templates from IndexedDB + Supabase Cloud
@@ -1173,11 +1269,10 @@ export default function OrganizerCertificatesPage() {
         return 'EE Credit'
     }
 
-    const fetchDbParticipants = async (forceApply: boolean | any = false) => {
-        const shouldForce = typeof forceApply === 'boolean' ? forceApply : false
+    const fetchDbParticipants = async () => {
         setLoadingParticipants(true)
         try {
-            const res = await fetch('/api/organizer/students')
+            const res = await fetch('/api/organizer/students', { cache: 'no-store' })
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}))
                 throw new Error(errData.error || `HTTP ${res.status}`)
@@ -1201,13 +1296,6 @@ export default function OrganizerCertificatesPage() {
                         sessionStorage.setItem('hackare_db_participants', JSON.stringify(formatted))
                     }
                 } catch { }
-
-                setDataSource(curSource => {
-                    if (curSource === 'db' || shouldForce) {
-                        setParticipants([...formatted])
-                    }
-                    return curSource
-                })
             }
         } catch (e: any) {
             console.error('Error fetching participants from DB:', e)
@@ -1225,32 +1313,26 @@ export default function OrganizerCertificatesPage() {
         setTeamFilter('All')
         setPreviewIndex(0)
 
-        // 1. Immediately apply from memory or sessionStorage cache for instant, zero-delay render
-        let immediateLoaded = false
-        if (dbParticipantsList && dbParticipantsList.length > 0) {
-            setParticipants([...dbParticipantsList])
-            immediateLoaded = true
-        } else {
+        // Instant local cache restore if in-memory DB list was empty
+        if (dbParticipantsList.length === 0) {
             try {
                 if (typeof window !== 'undefined' && window.sessionStorage) {
-                    const cached = sessionStorage.getItem('hackare_db_participants')
-                    if (cached) {
-                        const parsed = JSON.parse(cached)
+                    const cachedDb = sessionStorage.getItem('hackare_db_participants')
+                    if (cachedDb) {
+                        const parsed = JSON.parse(cachedDb)
                         if (Array.isArray(parsed) && parsed.length > 0) {
                             setDbParticipantsList(parsed)
-                            setParticipants([...parsed])
-                            immediateLoaded = true
                         }
                     }
                 }
             } catch { }
         }
 
-        // 2. Refresh from database to ensure up-to-date data without needing browser refresh
-        await fetchDbParticipants(true)
-        if (!immediateLoaded) {
-            showToast('info', 'Loaded participants from database.')
-        }
+        // Fetch fresh participants and winning teams from Supabase database in parallel
+        await Promise.all([
+            fetchDbParticipants(),
+            syncWinningTeamsFromDb()
+        ])
     }
 
     const switchToExcelMode = () => {
@@ -1261,10 +1343,7 @@ export default function OrganizerCertificatesPage() {
         setTeamFilter('All')
         setPreviewIndex(0)
 
-        if (excelParticipantsList.length > 0) {
-            setParticipants([...excelParticipantsList])
-        } else {
-            setParticipants([])
+        if (excelParticipantsList.length === 0) {
             excelInputRef.current?.click()
         }
     }
@@ -1272,6 +1351,16 @@ export default function OrganizerCertificatesPage() {
     const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
         if (!file) return
+
+        // Clear previous Excel cert codes cache so the newly uploaded spreadsheet always gets fresh, clean IDs
+        for (const key of Array.from(certCodeCacheRef.current.keys())) {
+            if (key.startsWith('excel:')) {
+                certCodeCacheRef.current.delete(key)
+            }
+        }
+        try {
+            localStorage.removeItem('hackare_excel_cert_codes')
+        } catch { }
 
         setExcelFileName(file.name)
         setSearchQuery('')
@@ -1308,17 +1397,18 @@ export default function OrganizerCertificatesPage() {
                     const year = String(findKey(['year', 'academic year']) || '2nd Year').trim()
                     const team_name = String(findKey(['team', 'team name', 'team_name', 'group']) || 'General Cohort').trim()
                     const rowCategory = String(findKey(['category', 'credit', 'type']) || '').trim()
+                    const rowEvent = String(findKey(['event', 'event name', 'event_name', 'event title', 'competition']) || '').trim()
                     const excelCertCode = String(findKey(['certificate_code', 'certificate_id', 'cert_code', 'cert_id', 'cert id', 'certificate id']) || '').trim()
 
-                    // Cross-check if this student already has a registered certificate code in DB
-                    let matchedDbCertCode = excelCertCode
-                    if (!matchedDbCertCode && reg_no && issuedCertificates.length > 0) {
-                        const cleanReg = reg_no.trim().toLowerCase()
-                        const dbMatch = issuedCertificates.find(c => (c.reg_no || '').trim().toLowerCase() === cleanReg)
-                        if (dbMatch?.certificate_code) {
-                            matchedDbCertCode = dbMatch.certificate_code
-                        }
+                    if (rowEvent && index === 0) {
+                        setExcelEventName(rowEvent)
+                        try {
+                            localStorage.setItem('hackare_excel_event_name', rowEvent)
+                        } catch { }
                     }
+
+                    // For Excel, NEVER query DB / issuedCertificates for unique IDs
+                    const finalExcelCertCode = excelCertCode || undefined
 
                     let assignedCategory: 'Group 3' | 'EE Credit' | 'Not Eligible' = determineCategoryByYear(year)
                     if (rowCategory) {
@@ -1342,12 +1432,11 @@ export default function OrganizerCertificatesPage() {
                         team_name: team_name,
                         category: assignedCategory,
                         selected: true,
-                        certificate_code: matchedDbCertCode || undefined
+                        certificate_code: finalExcelCertCode
                     }
                 })
 
                 setExcelParticipantsList(parsed)
-                setParticipants(parsed)
                 setDataSource('excel')
                 showToast('success', `Parsed ${parsed.length} participants from spreadsheet "${file.name}"!`)
             } catch (err: any) {
@@ -1746,6 +1835,7 @@ export default function OrganizerCertificatesPage() {
         category?: string
         team_name?: string
         type: string
+        event_name?: string
         issue_date?: string
     }>): Promise<string[]> => {
         if (!items || items.length === 0) return []
@@ -1825,6 +1915,7 @@ export default function OrganizerCertificatesPage() {
                         category: p.category,
                         team_name: p.team_name,
                         type: selectedCertType,
+                        event_name: activeEventName,
                         issue_date: new Date().toISOString()
                     }
                 }
@@ -1932,23 +2023,26 @@ export default function OrganizerCertificatesPage() {
                     category: p.category,
                     template_name: selectedCertType,
                     award_tier: selectedCertType,
+                    event_name: activeEventName,
                     winner_rank: matchWinner ? parseInt(matchWinner[1], 10) : null
                 })
             }
 
             setGeneratedResults(results)
 
-            // Save to DB via API
-            try {
-                setProgress(prev => ({ ...prev, message: 'Syncing records to registry database...' }))
-                await fetch('/api/organizer/certificates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ certificates: certificatesToPersist })
-                })
-                fetchIssuedCertificates()
-            } catch (saveErr) {
-                console.warn('Could not auto-save to DB:', saveErr)
+            // Save to DB via API (ONLY for DB participants, NEVER for Excel!)
+            if (dataSource === 'db') {
+                try {
+                    setProgress(prev => ({ ...prev, message: 'Syncing records to registry database...' }))
+                    await fetch('/api/organizer/certificates', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ certificates: certificatesToPersist })
+                    })
+                    fetchIssuedCertificates()
+                } catch (saveErr) {
+                    console.warn('Could not auto-save to DB:', saveErr)
+                }
             }
 
             showToast('success', `Generated ${results.length} certificates with Unique IDs and scannable QR codes!`)
@@ -2097,6 +2191,7 @@ export default function OrganizerCertificatesPage() {
                         category: p.category,
                         team_name: p.team_name,
                         type: tierId,
+                        event_name: activeEventName,
                         issue_date: new Date().toISOString()
                     }
                 }
@@ -2220,22 +2315,26 @@ export default function OrganizerCertificatesPage() {
                     category: p.category,
                     template_name: tierId,
                     award_tier: tierId,
+                    event_name: activeEventName,
                     winner_rank: matchWinner ? parseInt(matchWinner[1], 10) : null
                 })
             }
 
             setGeneratedResults(results)
 
-            try {
-                setProgress(prev => ({ ...prev, message: 'Syncing all records to registry database...' }))
-                await fetch('/api/organizer/certificates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ certificates: certificatesToPersist })
-                })
-                fetchIssuedCertificates()
-            } catch (saveErr) {
-                console.warn('Could not auto-save to DB:', saveErr)
+            // Save to DB via API (ONLY for DB participants, NEVER for Excel!)
+            if (dataSource === 'db') {
+                try {
+                    setProgress(prev => ({ ...prev, message: 'Syncing all records to registry database...' }))
+                    await fetch('/api/organizer/certificates', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ certificates: certificatesToPersist })
+                    })
+                    fetchIssuedCertificates()
+                } catch (saveErr) {
+                    console.warn('Could not auto-save to DB:', saveErr)
+                }
             }
 
             showToast('success', `Generated ${results.length} multi-tier certificates!`)
@@ -2574,6 +2673,7 @@ export default function OrganizerCertificatesPage() {
                 category: currentStudent.category,
                 team_name: currentStudent.team_name,
                 type: tierId,
+                event_name: activeEventName,
                 issue_date: new Date().toISOString()
             }])
             const token = tokens[0] || ''
@@ -2746,6 +2846,7 @@ export default function OrganizerCertificatesPage() {
                         category: p.category,
                         team_name: p.team_name,
                         type: tierId,
+                        event_name: activeEventName,
                         issue_date: new Date().toISOString()
                     }
                 }
@@ -2769,26 +2870,28 @@ export default function OrganizerCertificatesPage() {
                 triggerFileDownload(blob, `Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`)
                 showToast('success', `Downloaded PNG certificate for ${p.name}!`)
 
-                // Auto-persist single certificate to Supabase in background
-                fetch('/api/organizer/certificates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        certificates: [{
-                            certificate_code: certCode,
-                            user_id: p.id?.startsWith('excel_') ? null : p.id,
-                            name: p.name,
-                            reg_no: p.reg_no,
-                            dept: p.dept,
-                            section: p.section,
-                            year: p.year,
-                            team_name: p.team_name,
-                            category: p.category,
-                            award_tier: tierId,
-                            template_name: tierId
-                        }]
-                    })
-                }).then(() => fetchIssuedCertificates()).catch(() => {})
+                // Auto-persist single certificate to Supabase in background (ONLY for DB participants)
+                if (dataSource === 'db' && !p.id?.startsWith('excel_')) {
+                    fetch('/api/organizer/certificates', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            certificates: [{
+                                certificate_code: certCode,
+                                user_id: p.id,
+                                name: p.name,
+                                reg_no: p.reg_no,
+                                dept: p.dept,
+                                section: p.section,
+                                year: p.year,
+                                team_name: p.team_name,
+                                category: p.category,
+                                award_tier: tierId,
+                                template_name: tierId
+                            }]
+                        })
+                    }).then(() => fetchIssuedCertificates()).catch(() => { })
+                }
                 return
             }
 
@@ -2844,31 +2947,33 @@ export default function OrganizerCertificatesPage() {
             triggerFileDownload(zipBlob, `GDG_KARE_${cleanCatName}_PNG_${new Date().toISOString().slice(0, 10)}.zip`)
             showToast('success', `Successfully exported ${targets.length} PNG certificates for "${cat.label}"!`)
 
-            // Auto-persist issued certificates to Supabase DB in background
-            try {
-                const certificatesToPersist = signingItems.map(s => {
-                    const p = targets.find(t => t.reg_no === s.item.reg_no) || s.item
-                    return {
-                        certificate_code: s.certCode,
-                        user_id: p.id?.startsWith('excel_') ? null : p.id,
-                        name: p.name,
-                        reg_no: p.reg_no,
-                        dept: p.dept,
-                        section: p.section,
-                        year: p.year,
-                        team_name: p.team_name,
-                        category: p.category,
-                        award_tier: s.tierId,
-                        template_name: s.tierId
-                    }
-                })
-                fetch('/api/organizer/certificates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ certificates: certificatesToPersist })
-                }).then(() => fetchIssuedCertificates()).catch(() => {})
-            } catch (persistErr) {
-                console.warn('Background cert persist failed:', persistErr)
+            // Auto-persist issued certificates to Supabase DB in background (ONLY for DB participants)
+            if (dataSource === 'db') {
+                try {
+                    const certificatesToPersist = signingItems.map(s => {
+                        const p = targets.find(t => t.reg_no === s.item.reg_no) || s.item
+                        return {
+                            certificate_code: s.certCode,
+                            user_id: p.id?.startsWith('excel_') ? null : p.id,
+                            name: p.name,
+                            reg_no: p.reg_no,
+                            dept: p.dept,
+                            section: p.section,
+                            year: p.year,
+                            team_name: p.team_name,
+                            category: p.category,
+                            award_tier: s.tierId,
+                            template_name: s.tierId
+                        }
+                    })
+                    fetch('/api/organizer/certificates', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ certificates: certificatesToPersist })
+                    }).then(() => fetchIssuedCertificates()).catch(() => { })
+                } catch (persistErr) {
+                    console.warn('Background cert persist failed:', persistErr)
+                }
             }
         } catch (err: any) {
             console.error('Download PNG category failed:', err)
@@ -2897,15 +3002,16 @@ export default function OrganizerCertificatesPage() {
                         const cleanName = (c.name || '').trim().toLowerCase()
                         const tier = (c.award_tier || c.template_name || '').trim().toLowerCase()
                         if (cleanReg) {
-                            certCodeCacheRef.current.set(`${cleanReg}_${tier}`, c.certificate_code)
-                            certCodeCacheRef.current.set(cleanReg, c.certificate_code)
+                            certCodeCacheRef.current.set(`db:${cleanReg}_${tier}`, c.certificate_code)
+                            certCodeCacheRef.current.set(`db:${cleanReg}`, c.certificate_code)
                         }
                         if (cleanId) {
-                            certCodeCacheRef.current.set(`${cleanId}_${tier}`, c.certificate_code)
-                            certCodeCacheRef.current.set(cleanId, c.certificate_code)
+                            certCodeCacheRef.current.set(`db:${cleanId}_${tier}`, c.certificate_code)
+                            certCodeCacheRef.current.set(`db:${cleanId}`, c.certificate_code)
                         }
                         if (cleanName) {
-                            certCodeCacheRef.current.set(`${cleanName}_${tier}`, c.certificate_code)
+                            certCodeCacheRef.current.set(`db:${cleanName}_${tier}`, c.certificate_code)
+                            certCodeCacheRef.current.set(`db:${cleanName}`, c.certificate_code)
                         }
                     }
                 }
@@ -2936,11 +3042,6 @@ export default function OrganizerCertificatesPage() {
     const toggleSelectAll = (select: boolean) => {
         const targetIds = new Set(filteredParticipants.map(p => p.id))
         setParticipants(prev => prev.map(p => targetIds.has(p.id) ? { ...p, selected: select } : p))
-        if (dataSource === 'db') {
-            setDbParticipantsList(prev => prev.map(p => targetIds.has(p.id) ? { ...p, selected: select } : p))
-        } else {
-            setExcelParticipantsList(prev => prev.map(p => targetIds.has(p.id) ? { ...p, selected: select } : p))
-        }
     }
 
     const [savingCategories, setSavingCategories] = useState(false)
@@ -2952,7 +3053,6 @@ export default function OrganizerCertificatesPage() {
 
         // If from database, auto-save to backend
         if (!participantId.startsWith('excel_')) {
-            setDbParticipantsList(prev => prev.map(p => p.id === participantId ? { ...p, category: newCategory } : p))
             try {
                 const res = await fetch('/api/organizer/students', {
                     method: 'PATCH',
@@ -2969,8 +3069,6 @@ export default function OrganizerCertificatesPage() {
                 console.error('Error auto-saving category to DB:', err)
                 showToast('error', 'Network error saving category to database.')
             }
-        } else {
-            setExcelParticipantsList(prev => prev.map(p => p.id === participantId ? { ...p, category: newCategory } : p))
         }
     }
 
@@ -3062,10 +3160,7 @@ export default function OrganizerCertificatesPage() {
                             }`}
                         title="View previously issued certificates"
                     >
-                        <span>Issued Registry</span>
-                        <span className="bg-emerald-500/20 text-emerald-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                            {issuedCertificates.length}
-                        </span>
+
                     </button>
                 </div>
             </div>
@@ -3202,17 +3297,24 @@ export default function OrganizerCertificatesPage() {
                                 </div>
 
                                 {/* Save Winning Teams to DB Button */}
-                                <button
-                                    type="button"
-                                    id="save-winning-teams-btn"
-                                    onClick={saveWinningTeamsToDb}
-                                    disabled={savingWinningTeams}
-                                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-2 cursor-pointer transition-all"
-                                    title="Save winning teams configuration permanently to Supabase database"
-                                >
-                                    <CheckCircle2 size={16} className={savingWinningTeams ? 'animate-spin' : ''} />
-                                    <span>{savingWinningTeams ? 'Saving to Database...' : '💾 Save Winning Teams to DB'}</span>
-                                </button>
+                                {dataSource === 'db' ? (
+                                    <button
+                                        type="button"
+                                        id="save-winning-teams-btn"
+                                        onClick={saveWinningTeamsToDb}
+                                        disabled={savingWinningTeams}
+                                        className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm flex items-center gap-2 cursor-pointer transition-all"
+                                        title="Save winning teams configuration permanently to Supabase database"
+                                    >
+                                        <CheckCircle2 size={16} className={savingWinningTeams ? 'animate-spin' : ''} />
+                                        <span>{savingWinningTeams ? 'Saving to Database...' : '💾 Save Winning Teams to DB'}</span>
+                                    </button>
+                                ) : (
+                                    <div className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold">
+                                        <FileSpreadsheet size={14} className="text-emerald-600" />
+                                        <span>Excel Sheet Winners (Session)</span>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -3387,7 +3489,10 @@ export default function OrganizerCertificatesPage() {
                                 {dataSource === 'db' ? (
                                     <button
                                         type="button"
-                                        onClick={() => fetchDbParticipants(true)}
+                                        onClick={() => {
+                                            fetchDbParticipants()
+                                            syncWinningTeamsFromDb()
+                                        }}
                                         disabled={loadingParticipants}
                                         className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
                                     >
@@ -3401,7 +3506,7 @@ export default function OrganizerCertificatesPage() {
                                         className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
                                     >
                                         <Upload size={13} />
-                                        <span>{excelFileName ? 'Replace Excel File' : 'Upload Excel / CSV'}</span>
+                                        <span>{excelFileName ? 'Replace or add new Excel File' : 'Upload Excel / CSV'}</span>
                                     </button>
                                 )}
                             </div>
@@ -3415,6 +3520,178 @@ export default function OrganizerCertificatesPage() {
                             onChange={handleExcelUpload}
                             className="hidden"
                         />
+
+                        {/* Event Name Display & Edit for DB Mode */}
+                        {dataSource === 'db' && (
+                            <div className="bg-blue-50/50 border border-blue-200/90 rounded-xl p-4 transition-all">
+                                {!isEditingDbEvent ? (
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                                                <Trophy size={18} />
+                                            </div>
+                                            <div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Event Name</span>
+                                                    <span className="text-[10px] font-bold text-blue-800 bg-blue-100 border border-blue-300 px-2 py-0.5 rounded-full">
+                                                        ● Embeds in QR Code & Displayed on Scanner
+                                                    </span>
+                                                </div>
+                                                <span className="text-sm sm:text-base font-black text-gray-900 block mt-0.5">{dbEventName}</span>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 self-start sm:self-auto">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setTempDbEventName(dbEventName)
+                                                    setIsEditingDbEvent(true)
+                                                }}
+                                                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                                                title="Edit Event Name"
+                                            >
+                                                <Edit3 size={13} />
+                                                <span>Edit Event Name</span>
+                                            </button>
+                                            {dbEventName !== 'GDG-KARE Event Management Platform' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setDbEventName('GDG-KARE Event Management Platform')
+                                                        setTempDbEventName('GDG-KARE Event Management Platform')
+                                                        try {
+                                                            localStorage.removeItem('hackare_db_event_name')
+                                                        } catch { }
+                                                        setToast({ type: 'info', message: 'Event name reset to default' })
+                                                    }}
+                                                    className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                                                    title="Reset to default event name"
+                                                >
+                                                    Reset
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2.5">
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                            <label htmlFor="db-event-name-input" className="text-xs font-bold text-gray-900 flex items-center gap-2">
+                                                <span className="w-6 h-6 rounded-md bg-blue-600 text-white flex items-center justify-center shrink-0">
+                                                    <Edit3 size={13} />
+                                                </span>
+                                                <span>Edit Event Name for Database Certificates:</span>
+                                            </label>
+                                            <span className="text-[10px] font-bold text-blue-800 bg-blue-100 border border-blue-300 px-2.5 py-0.5 rounded-full self-start sm:self-auto">
+                                                ● Embeds in QR Code & Displayed on Scanner
+                                            </span>
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                            <input
+                                                id="db-event-name-input"
+                                                type="text"
+                                                value={tempDbEventName}
+                                                onChange={(e) => setTempDbEventName(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        const finalName = tempDbEventName.trim() || 'GDG-KARE Event Management Platform'
+                                                        setDbEventName(finalName)
+                                                        try {
+                                                            localStorage.setItem('hackare_db_event_name', finalName)
+                                                        } catch { }
+                                                        setIsEditingDbEvent(false)
+                                                        setToast({ type: 'success', message: 'Event name updated!' })
+                                                    } else if (e.key === 'Escape') {
+                                                        setIsEditingDbEvent(false)
+                                                    }
+                                                }}
+                                                autoFocus
+                                                placeholder="Enter Event Name (e.g., HackKare 2026, AI & ML Bootcamp, Web3 Summit...)"
+                                                className="flex-1 px-3.5 py-2.5 bg-white border border-blue-400 rounded-xl text-xs sm:text-sm font-bold text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:outline-none shadow-xs"
+                                            />
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const finalName = tempDbEventName.trim() || 'GDG-KARE Event Management Platform'
+                                                        setDbEventName(finalName)
+                                                        try {
+                                                            localStorage.setItem('hackare_db_event_name', finalName)
+                                                        } catch { }
+                                                        setIsEditingDbEvent(false)
+                                                        setToast({ type: 'success', message: 'Event name updated!' })
+                                                    }}
+                                                    className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                                                >
+                                                    <Check size={13} />
+                                                    <span>Save</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setTempDbEventName('GDG-KARE Event Management Platform')
+                                                        setDbEventName('GDG-KARE Event Management Platform')
+                                                        try {
+                                                            localStorage.removeItem('hackare_db_event_name')
+                                                        } catch { }
+                                                        setIsEditingDbEvent(false)
+                                                        setToast({ type: 'info', message: 'Reset to default event name' })
+                                                    }}
+                                                    className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                                                >
+                                                    Reset
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsEditingDbEvent(false)}
+                                                    className="px-3 py-2.5 bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                                                >
+                                                    <X size={13} />
+                                                    <span>Cancel</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <p className="text-[11px] text-gray-500">
+                                            Press <kbd className="px-1 py-0.5 bg-slate-200 rounded text-[10px]">Enter</kbd> to save. This name will be cryptographically signed into each certificate&apos;s QR code and displayed to anyone who verifies or scans the certificate.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Event Name Text Input for Excel Mode */}
+                        {dataSource === 'excel' && (
+                            <div className="bg-emerald-50/50 border border-emerald-200/90 rounded-xl p-4 space-y-2">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                    <label htmlFor="excel-event-name-input" className="text-xs font-bold text-gray-900 flex items-center gap-2">
+                                        <span className="w-6 h-6 rounded-md bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                                            <Trophy size={13} />
+                                        </span>
+                                        <span>Event Name for this Spreadsheet:</span>
+                                    </label>
+                                    <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-full self-start sm:self-auto">
+                                        ● Embeds in QR Code & Displayed on Scanner
+                                    </span>
+                                </div>
+                                <div className="relative">
+                                    <input
+                                        id="excel-event-name-input"
+                                        type="text"
+                                        value={excelEventName}
+                                        onChange={(e) => {
+                                            setExcelEventName(e.target.value)
+                                            try {
+                                                localStorage.setItem('hackare_excel_event_name', e.target.value)
+                                            } catch { }
+                                        }}
+                                        placeholder="Enter Event Name (e.g., HackKare 2026, AI & ML Bootcamp, Web3 Summit...)"
+                                        className="w-full px-3.5 py-2.5 bg-white border border-emerald-300 rounded-xl text-xs font-bold text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-emerald-500 focus:outline-none shadow-xs"
+                                    />
+                                </div>
+                                <p className="text-[11px] text-gray-500">
+                                    This event name will be cryptographically signed into every certificate&apos;s QR code and displayed to anyone who verifies or scans the certificate.
+                                </p>
+                            </div>
+                        )}
 
                         {/* If Excel mode and no participants loaded yet, display prominent upload dropzone */}
                         {dataSource === 'excel' && participants.length === 0 && (
@@ -3533,16 +3810,18 @@ export default function OrganizerCertificatesPage() {
                             </div>
 
                             <div className="flex flex-wrap items-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={saveAllCategoriesToDb}
-                                    disabled={savingCategories}
-                                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg font-bold flex items-center gap-1.5 shadow-sm transition-all text-xs"
-                                    title="Save all assigned categories to database"
-                                >
-                                    <CheckCircle2 size={13} className={savingCategories ? 'animate-spin' : ''} />
-                                    <span>{savingCategories ? 'Saving...' : 'Save to DB'}</span>
-                                </button>
+                                {dataSource === 'db' && (
+                                    <button
+                                        type="button"
+                                        onClick={saveAllCategoriesToDb}
+                                        disabled={savingCategories}
+                                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg font-bold flex items-center gap-1.5 shadow-sm transition-all text-xs cursor-pointer"
+                                        title="Save all assigned categories to database"
+                                    >
+                                        <CheckCircle2 size={13} className={savingCategories ? 'animate-spin' : ''} />
+                                        <span>{savingCategories ? 'Saving...' : 'Save to DB'}</span>
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     onClick={() => toggleSelectAll(true)}
@@ -3611,7 +3890,10 @@ export default function OrganizerCertificatesPage() {
                                                             {dataSource === 'db' ? (
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => fetchDbParticipants(true)}
+                                                                    onClick={() => {
+                                                                        fetchDbParticipants()
+                                                                        syncWinningTeamsFromDb()
+                                                                    }}
                                                                     className="mt-1 px-3 py-1 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all cursor-pointer"
                                                                 >
                                                                     Refresh Database
@@ -3663,11 +3945,6 @@ export default function OrganizerCertificatesPage() {
                                                                 onChange={(e) => {
                                                                     const check = e.target.checked
                                                                     setParticipants(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
-                                                                    if (dataSource === 'db') {
-                                                                        setDbParticipantsList(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
-                                                                    } else {
-                                                                        setExcelParticipantsList(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
-                                                                    }
                                                                 }}
                                                                 className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                                                             />
@@ -3769,13 +4046,12 @@ export default function OrganizerCertificatesPage() {
                                         key={item.id}
                                         type="button"
                                         onClick={() => setCalibrationTab(item.id as any)}
-                                        className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center gap-1.5 cursor-pointer ${
-                                            calibrationTab === item.id 
-                                                ? 'bg-slate-900 text-white border-slate-900 shadow-2xs' 
-                                                : item.enabled
-                                                    ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                                                    : 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
-                                        }`}
+                                        className={`px-2.5 py-1 rounded-lg font-bold border transition-all text-xs flex items-center gap-1.5 cursor-pointer ${calibrationTab === item.id
+                                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                            : item.enabled
+                                                ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                                                : 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
+                                            }`}
                                     >
                                         <span>{item.label}</span>
                                         {!item.enabled && (
@@ -4095,13 +4371,12 @@ export default function OrganizerCertificatesPage() {
                                             key={item.id}
                                             type="button"
                                             onClick={() => setCalibrationTab(item.id as any)}
-                                            className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-                                                calibrationTab === item.id 
-                                                    ? 'bg-slate-900 text-white' 
-                                                    : item.enabled
-                                                        ? 'text-gray-600 hover:bg-gray-200'
-                                                        : 'text-rose-600 hover:bg-rose-50'
-                                            }`}
+                                            className={`px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${calibrationTab === item.id
+                                                ? 'bg-slate-900 text-white'
+                                                : item.enabled
+                                                    ? 'text-gray-600 hover:bg-gray-200'
+                                                    : 'text-rose-600 hover:bg-rose-50'
+                                                }`}
                                         >
                                             <span>{item.label}</span>
                                             {!item.enabled && (
@@ -4115,11 +4390,10 @@ export default function OrganizerCertificatesPage() {
                                 {calibrationTab === 'name' && (
                                     <div className="space-y-3 text-xs">
                                         {/* Status & Remove/Restore Box Control */}
-                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                            layout.name?.enabled !== false 
-                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
-                                                : 'bg-rose-50 border-rose-200 text-rose-900'
-                                        }`}>
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${layout.name?.enabled !== false
+                                            ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                                            }`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-2 rounded-full ${layout.name?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                                                 <span className="font-bold text-[11px]">
@@ -4132,11 +4406,10 @@ export default function OrganizerCertificatesPage() {
                                                     ...prev,
                                                     name: { ...prev.name, enabled: prev.name?.enabled === false ? true : false }
                                                 }))}
-                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                    layout.name?.enabled !== false
-                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
-                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
-                                                }`}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${layout.name?.enabled !== false
+                                                    ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                    }`}
                                             >
                                                 {layout.name?.enabled !== false ? (
                                                     <>
@@ -4227,11 +4500,10 @@ export default function OrganizerCertificatesPage() {
                                 {calibrationTab === 'regNo' && (
                                     <div className="space-y-3 text-xs">
                                         {/* Status & Remove/Restore Box Control */}
-                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                            layout.regNo?.enabled !== false 
-                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
-                                                : 'bg-rose-50 border-rose-200 text-rose-900'
-                                        }`}>
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${layout.regNo?.enabled !== false
+                                            ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                                            }`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-2 rounded-full ${layout.regNo?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                                                 <span className="font-bold text-[11px]">
@@ -4244,11 +4516,10 @@ export default function OrganizerCertificatesPage() {
                                                     ...prev,
                                                     regNo: { ...prev.regNo, enabled: prev.regNo?.enabled === false ? true : false }
                                                 }))}
-                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                    layout.regNo?.enabled !== false
-                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
-                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
-                                                }`}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${layout.regNo?.enabled !== false
+                                                    ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                    }`}
                                             >
                                                 {layout.regNo?.enabled !== false ? (
                                                     <>
@@ -4336,11 +4607,10 @@ export default function OrganizerCertificatesPage() {
                                 {calibrationTab === 'credit' && (
                                     <div className="space-y-3 text-xs">
                                         {/* Status & Remove/Restore Box Control */}
-                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                            (layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false 
-                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
-                                                : 'bg-rose-50 border-rose-200 text-rose-900'
-                                        }`}>
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                            ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                                            }`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-2 rounded-full ${(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                                                 <span className="font-bold text-[11px]">
@@ -4357,11 +4627,10 @@ export default function OrganizerCertificatesPage() {
                                                         enabled: (prev.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) === false ? true : false
                                                     }
                                                 }))}
-                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                    (layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
-                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
-                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
-                                                }`}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                    ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                    }`}
                                             >
                                                 {(layout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? (
                                                     <>
@@ -4584,11 +4853,10 @@ export default function OrganizerCertificatesPage() {
                                 {calibrationTab === 'qrCode' && (
                                     <div className="space-y-3 text-xs">
                                         {/* Status & Remove/Restore Box Control */}
-                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                            layout.qrCode?.enabled !== false 
-                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
-                                                : 'bg-rose-50 border-rose-200 text-rose-900'
-                                        }`}>
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${layout.qrCode?.enabled !== false
+                                            ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                                            }`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-2 rounded-full ${layout.qrCode?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                                                 <span className="font-bold text-[11px]">
@@ -4601,11 +4869,10 @@ export default function OrganizerCertificatesPage() {
                                                     ...prev,
                                                     qrCode: { ...prev.qrCode, enabled: prev.qrCode?.enabled === false ? true : false }
                                                 }))}
-                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                    layout.qrCode?.enabled !== false
-                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
-                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
-                                                }`}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${layout.qrCode?.enabled !== false
+                                                    ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                    }`}
                                             >
                                                 {layout.qrCode?.enabled !== false ? (
                                                     <>
@@ -4678,11 +4945,10 @@ export default function OrganizerCertificatesPage() {
                                 {calibrationTab === 'certId' && (
                                     <div className="space-y-3 text-xs">
                                         {/* Status & Remove/Restore Box Control */}
-                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                            layout.certId?.enabled !== false 
-                                                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
-                                                : 'bg-rose-50 border-rose-200 text-rose-900'
-                                        }`}>
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${layout.certId?.enabled !== false
+                                            ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                                            }`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-2 rounded-full ${layout.certId?.enabled !== false ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                                                 <span className="font-bold text-[11px]">
@@ -4695,11 +4961,10 @@ export default function OrganizerCertificatesPage() {
                                                     ...prev,
                                                     certId: { ...prev.certId, enabled: prev.certId?.enabled === false ? true : false }
                                                 }))}
-                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                    layout.certId?.enabled !== false
-                                                        ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
-                                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
-                                                }`}
+                                                className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${layout.certId?.enabled !== false
+                                                    ? 'bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs'
+                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                                                    }`}
                                             >
                                                 {layout.certId?.enabled !== false ? (
                                                     <>
@@ -5382,9 +5647,9 @@ export default function OrganizerCertificatesPage() {
                                         {(['name', 'regNo', 'credit', 'certId', 'qrCode'] as const).map(tab => {
                                             const isEnabled = tab === 'name' ? previewLayout.name?.enabled !== false
                                                 : tab === 'regNo' ? previewLayout.regNo?.enabled !== false
-                                                : tab === 'credit' ? (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
-                                                : tab === 'certId' ? previewLayout.certId?.enabled !== false
-                                                : previewLayout.qrCode?.enabled !== false
+                                                    : tab === 'credit' ? (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                        : tab === 'certId' ? previewLayout.certId?.enabled !== false
+                                                            : previewLayout.qrCode?.enabled !== false
 
                                             const labels = {
                                                 name: `👤 Name${!isEnabled ? ' (Off)' : ''}`,
@@ -5418,11 +5683,10 @@ export default function OrganizerCertificatesPage() {
                                         {previewTunerTab === 'name' && (
                                             <div className="space-y-4">
                                                 {/* Status & Remove/Restore Box Control */}
-                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                                    previewLayout.name?.enabled !== false
-                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
-                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
-                                                }`}>
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${previewLayout.name?.enabled !== false
+                                                    ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                    : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                    }`}>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`w-2 h-2 rounded-full ${previewLayout.name?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                                                         <span className="font-bold text-[11px]">
@@ -5435,11 +5699,10 @@ export default function OrganizerCertificatesPage() {
                                                             ...prev,
                                                             name: { ...prev.name, enabled: prev.name?.enabled === false ? true : false }
                                                         }))}
-                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                            previewLayout.name?.enabled !== false
-                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
-                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
-                                                        }`}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${previewLayout.name?.enabled !== false
+                                                            ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                            }`}
                                                     >
                                                         {previewLayout.name?.enabled !== false ? (
                                                             <>
@@ -5654,11 +5917,10 @@ export default function OrganizerCertificatesPage() {
                                         {previewTunerTab === 'regNo' && (
                                             <div className="space-y-4">
                                                 {/* Status & Remove/Restore Box Control */}
-                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                                    previewLayout.regNo?.enabled !== false
-                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
-                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
-                                                }`}>
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${previewLayout.regNo?.enabled !== false
+                                                    ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                    : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                    }`}>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`w-2 h-2 rounded-full ${previewLayout.regNo?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                                                         <span className="font-bold text-[11px]">
@@ -5671,11 +5933,10 @@ export default function OrganizerCertificatesPage() {
                                                             ...prev,
                                                             regNo: { ...prev.regNo, enabled: prev.regNo?.enabled === false ? true : false }
                                                         }))}
-                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                            previewLayout.regNo?.enabled !== false
-                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
-                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
-                                                        }`}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${previewLayout.regNo?.enabled !== false
+                                                            ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                            }`}
                                                     >
                                                         {previewLayout.regNo?.enabled !== false ? (
                                                             <>
@@ -5762,11 +6023,10 @@ export default function OrganizerCertificatesPage() {
                                         {previewTunerTab === 'credit' && (
                                             <div className="space-y-4">
                                                 {/* Status & Remove/Restore Box Control */}
-                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                                    (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
-                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
-                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
-                                                }`}>
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                    ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                    : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                    }`}>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`w-2 h-2 rounded-full ${(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                                                         <span className="font-bold text-[11px]">
@@ -5783,11 +6043,10 @@ export default function OrganizerCertificatesPage() {
                                                                 enabled: (prev.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) === false ? true : false
                                                             }
                                                         }))}
-                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                            (previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
-                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
-                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
-                                                        }`}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false
+                                                            ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                            }`}
                                                     >
                                                         {(previewLayout.credit?.enabled ?? DEFAULT_CREDIT_LAYOUT.enabled) !== false ? (
                                                             <>
@@ -5946,11 +6205,10 @@ export default function OrganizerCertificatesPage() {
                                         {previewTunerTab === 'certId' && (
                                             <div className="space-y-4">
                                                 {/* Status & Remove/Restore Box Control */}
-                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                                    previewLayout.certId?.enabled !== false
-                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
-                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
-                                                }`}>
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${previewLayout.certId?.enabled !== false
+                                                    ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                    : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                    }`}>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`w-2 h-2 rounded-full ${previewLayout.certId?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                                                         <span className="font-bold text-[11px]">
@@ -5963,11 +6221,10 @@ export default function OrganizerCertificatesPage() {
                                                             ...prev,
                                                             certId: { ...prev.certId, enabled: prev.certId?.enabled === false ? true : false }
                                                         }))}
-                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                            previewLayout.certId?.enabled !== false
-                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
-                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
-                                                        }`}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${previewLayout.certId?.enabled !== false
+                                                            ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                            }`}
                                                     >
                                                         {previewLayout.certId?.enabled !== false ? (
                                                             <>
@@ -6054,11 +6311,10 @@ export default function OrganizerCertificatesPage() {
                                         {previewTunerTab === 'qrCode' && (
                                             <div className="space-y-4">
                                                 {/* Status & Remove/Restore Box Control */}
-                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
-                                                    previewLayout.qrCode?.enabled !== false
-                                                        ? 'bg-slate-950/70 border-slate-800 text-slate-300'
-                                                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
-                                                }`}>
+                                                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${previewLayout.qrCode?.enabled !== false
+                                                    ? 'bg-slate-950/70 border-slate-800 text-slate-300'
+                                                    : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                                                    }`}>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`w-2 h-2 rounded-full ${previewLayout.qrCode?.enabled !== false ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                                                         <span className="font-bold text-[11px]">
@@ -6071,11 +6327,10 @@ export default function OrganizerCertificatesPage() {
                                                             ...prev,
                                                             qrCode: { ...prev.qrCode, enabled: prev.qrCode?.enabled === false ? true : false }
                                                         }))}
-                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
-                                                            previewLayout.qrCode?.enabled !== false
-                                                                ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
-                                                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
-                                                        }`}
+                                                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${previewLayout.qrCode?.enabled !== false
+                                                            ? 'bg-rose-900/30 hover:bg-rose-800/50 text-rose-300 border border-rose-700/60'
+                                                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                                                            }`}
                                                     >
                                                         {previewLayout.qrCode?.enabled !== false ? (
                                                             <>
