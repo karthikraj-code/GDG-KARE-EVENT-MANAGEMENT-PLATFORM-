@@ -1021,6 +1021,21 @@ export default function OrganizerCertificatesPage() {
                 console.error('Failed to parse saved layout', e)
             }
         }
+
+        // Try instant local cache for DB participants so there is 0ms delay on initial load
+        try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+                const cachedDb = sessionStorage.getItem('hackare_db_participants')
+                if (cachedDb) {
+                    const parsed = JSON.parse(cachedDb)
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        setDbParticipantsList(parsed)
+                        setParticipants(parsed)
+                    }
+                }
+            }
+        } catch { }
+
         fetchDbParticipants()
         fetchIssuedCertificates()
 
@@ -1158,12 +1173,17 @@ export default function OrganizerCertificatesPage() {
         return 'EE Credit'
     }
 
-    const fetchDbParticipants = async () => {
+    const fetchDbParticipants = async (forceApply: boolean | any = false) => {
+        const shouldForce = typeof forceApply === 'boolean' ? forceApply : false
         setLoadingParticipants(true)
         try {
             const res = await fetch('/api/organizer/students')
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}))
+                throw new Error(errData.error || `HTTP ${res.status}`)
+            }
             const data = await res.json()
-            if (data.students) {
+            if (data.students && Array.isArray(data.students)) {
                 const formatted: ParticipantRecord[] = data.students.map((s: any) => ({
                     id: s.id,
                     name: s.name || 'Participant',
@@ -1176,31 +1196,73 @@ export default function OrganizerCertificatesPage() {
                     selected: true
                 }))
                 setDbParticipantsList(formatted)
-                setParticipants(formatted)
+                try {
+                    if (typeof window !== 'undefined' && window.sessionStorage) {
+                        sessionStorage.setItem('hackare_db_participants', JSON.stringify(formatted))
+                    }
+                } catch { }
+
+                setDataSource(curSource => {
+                    if (curSource === 'db' || shouldForce) {
+                        setParticipants([...formatted])
+                    }
+                    return curSource
+                })
             }
-        } catch (e) {
+        } catch (e: any) {
             console.error('Error fetching participants from DB:', e)
-            showToast('error', 'Failed to load participants from database.')
+            showToast('error', `Failed to load participants from database: ${e.message || 'Network error'}`)
         } finally {
             setLoadingParticipants(false)
         }
     }
 
-    const switchToDbMode = () => {
+    const switchToDbMode = async () => {
         setActiveTab('studio')
         setDataSource('db')
-        if (dbParticipantsList.length > 0) {
-            setParticipants(dbParticipantsList)
+        setSearchQuery('')
+        setCategoryFilter('All')
+        setTeamFilter('All')
+        setPreviewIndex(0)
+
+        // 1. Immediately apply from memory or sessionStorage cache for instant, zero-delay render
+        let immediateLoaded = false
+        if (dbParticipantsList && dbParticipantsList.length > 0) {
+            setParticipants([...dbParticipantsList])
+            immediateLoaded = true
         } else {
-            fetchDbParticipants()
+            try {
+                if (typeof window !== 'undefined' && window.sessionStorage) {
+                    const cached = sessionStorage.getItem('hackare_db_participants')
+                    if (cached) {
+                        const parsed = JSON.parse(cached)
+                        if (Array.isArray(parsed) && parsed.length > 0) {
+                            setDbParticipantsList(parsed)
+                            setParticipants([...parsed])
+                            immediateLoaded = true
+                        }
+                    }
+                }
+            } catch { }
+        }
+
+        // 2. Refresh from database to ensure up-to-date data without needing browser refresh
+        await fetchDbParticipants(true)
+        if (!immediateLoaded) {
+            showToast('info', 'Loaded participants from database.')
         }
     }
 
     const switchToExcelMode = () => {
         setActiveTab('studio')
         setDataSource('excel')
+        setSearchQuery('')
+        setCategoryFilter('All')
+        setTeamFilter('All')
+        setPreviewIndex(0)
+
         if (excelParticipantsList.length > 0) {
-            setParticipants(excelParticipantsList)
+            setParticipants([...excelParticipantsList])
         } else {
             setParticipants([])
             excelInputRef.current?.click()
@@ -1212,6 +1274,10 @@ export default function OrganizerCertificatesPage() {
         if (!file) return
 
         setExcelFileName(file.name)
+        setSearchQuery('')
+        setCategoryFilter('All')
+        setTeamFilter('All')
+        setPreviewIndex(0)
         const reader = new FileReader()
         reader.onload = (evt) => {
             try {
@@ -2861,15 +2927,20 @@ export default function OrganizerCertificatesPage() {
                 (p.team_name && p.team_name.toLowerCase().includes(searchQuery.toLowerCase().trim()))
 
             const matchesCategory = categoryFilter === 'All' || p.category === categoryFilter
-            const matchesTeam = teamFilter === 'All' || p.team_name === teamFilter
+            const matchesTeam = teamFilter === 'All' || !uniqueTeams.includes(teamFilter) || p.team_name === teamFilter
 
             return matchesSearch && matchesCategory && matchesTeam
         })
-    }, [participants, searchQuery, categoryFilter, teamFilter])
+    }, [participants, searchQuery, categoryFilter, teamFilter, uniqueTeams])
 
     const toggleSelectAll = (select: boolean) => {
         const targetIds = new Set(filteredParticipants.map(p => p.id))
         setParticipants(prev => prev.map(p => targetIds.has(p.id) ? { ...p, selected: select } : p))
+        if (dataSource === 'db') {
+            setDbParticipantsList(prev => prev.map(p => targetIds.has(p.id) ? { ...p, selected: select } : p))
+        } else {
+            setExcelParticipantsList(prev => prev.map(p => targetIds.has(p.id) ? { ...p, selected: select } : p))
+        }
     }
 
     const [savingCategories, setSavingCategories] = useState(false)
@@ -2881,6 +2952,7 @@ export default function OrganizerCertificatesPage() {
 
         // If from database, auto-save to backend
         if (!participantId.startsWith('excel_')) {
+            setDbParticipantsList(prev => prev.map(p => p.id === participantId ? { ...p, category: newCategory } : p))
             try {
                 const res = await fetch('/api/organizer/students', {
                     method: 'PATCH',
@@ -2897,6 +2969,8 @@ export default function OrganizerCertificatesPage() {
                 console.error('Error auto-saving category to DB:', err)
                 showToast('error', 'Network error saving category to database.')
             }
+        } else {
+            setExcelParticipantsList(prev => prev.map(p => p.id === participantId ? { ...p, category: newCategory } : p))
         }
     }
 
@@ -2905,6 +2979,10 @@ export default function OrganizerCertificatesPage() {
         setSavingCategories(true)
         try {
             const dbParticipants = participants.filter(p => !p.id.startsWith('excel_'))
+            setDbParticipantsList(prev => {
+                const catMap = new Map(dbParticipants.map(p => [p.id, p.category]))
+                return prev.map(p => catMap.has(p.id) ? { ...p, category: catMap.get(p.id)! } : p)
+            })
             const res = await fetch('/api/organizer/students', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -3309,7 +3387,7 @@ export default function OrganizerCertificatesPage() {
                                 {dataSource === 'db' ? (
                                     <button
                                         type="button"
-                                        onClick={fetchDbParticipants}
+                                        onClick={() => fetchDbParticipants(true)}
                                         disabled={loadingParticipants}
                                         className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
                                     >
@@ -3432,7 +3510,7 @@ export default function OrganizerCertificatesPage() {
                                         <Users size={13} className="text-gray-500" />
                                         <span className="font-semibold text-gray-700">Team:</span>
                                         <select
-                                            value={teamFilter}
+                                            value={uniqueTeams.includes(teamFilter) ? teamFilter : 'All'}
                                             onChange={(e) => setTeamFilter(e.target.value)}
                                             className="text-xs bg-white border border-gray-300 rounded-lg px-2.5 py-1 font-semibold text-gray-800 focus:ring-2 focus:ring-emerald-500 max-w-[170px]"
                                         >
@@ -3512,56 +3590,123 @@ export default function OrganizerCertificatesPage() {
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-100">
-                                        {filteredParticipants.map((p, idx) => {
-                                            const awardTier = getParticipantAwardTier(p)
-                                            const isWinner = awardTier.startsWith('Winner')
-                                            return (
-                                                <tr key={p.id} className={`hover:bg-slate-50 ${p.selected ? 'bg-emerald-50/20' : 'opacity-60'}`}>
-                                                    <td className="py-2 px-3">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={p.selected}
-                                                            onChange={(e) => {
-                                                                const check = e.target.checked
-                                                                setParticipants(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
-                                                            }}
-                                                            className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                                                        />
-                                                    </td>
-                                                    <td className="py-2 px-3 font-semibold text-gray-900">{p.name}</td>
-                                                    <td className="py-2 px-3 font-mono font-bold text-gray-700">{p.reg_no || <span className="text-amber-500 italic">Missing</span>}</td>
-                                                    <td className="py-2 px-3">
-                                                        <span className="font-medium text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                                                            {p.team_name || '—'}
-                                                        </span>
-                                                    </td>
-                                                    <td className="py-2 px-3 text-gray-600">{p.dept} • {p.year} (Sec {p.section})</td>
-                                                    <td className="py-2 px-3">
-                                                        <select
-                                                            value={p.category}
-                                                            onChange={(e) => updateParticipantCategory(p.id, e.target.value)}
-                                                            className={`text-xs border rounded px-2 py-0.5 font-bold transition-colors ${p.category === 'EE Credit' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                                                                p.category === 'Not Eligible' ? 'bg-rose-50 text-rose-700 border-rose-200' :
-                                                                    'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                                                }`}
-                                                        >
-                                                            <option value="Group 3">Group 3</option>
-                                                            <option value="EE Credit">EE Credit</option>
-                                                            <option value="Not Eligible">Not Eligible</option>
-                                                        </select>
-                                                    </td>
-                                                    <td className="py-2 px-3">
-                                                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${isWinner
-                                                            ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold shadow-sm'
-                                                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                                            }`}>
-                                                            <span>{isWinner ? '🏆' : '🎖️'}</span>
-                                                            <span>{awardTier}</span>
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            )
-                                        })}
+                                        {loadingParticipants && participants.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={7} className="py-8 text-center text-gray-500">
+                                                    <div className="flex flex-col items-center justify-center gap-2">
+                                                        <RefreshCw size={18} className="animate-spin text-emerald-600" />
+                                                        <span className="text-xs font-semibold">Loading participants from database...</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ) : filteredParticipants.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={7} className="py-8 text-center text-gray-500">
+                                                    {participants.length === 0 ? (
+                                                        <div className="flex flex-col items-center justify-center gap-2">
+                                                            <Database size={22} className="text-gray-400" />
+                                                            <span className="text-xs font-semibold">
+                                                                {dataSource === 'db' ? 'No participants found in database.' : 'No participants loaded from spreadsheet.'}
+                                                            </span>
+                                                            {dataSource === 'db' ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => fetchDbParticipants(true)}
+                                                                    className="mt-1 px-3 py-1 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all cursor-pointer"
+                                                                >
+                                                                    Refresh Database
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => excelInputRef.current?.click()}
+                                                                    className="mt-1 px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all cursor-pointer"
+                                                                >
+                                                                    Upload Spreadsheet
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="flex flex-col items-center justify-center gap-1.5">
+                                                            <Search size={18} className="text-gray-400" />
+                                                            <span className="text-xs font-semibold text-gray-700">No participants match your filter</span>
+                                                            <p className="text-[11px] text-gray-400">
+                                                                {searchQuery && `Search: "${searchQuery}"`}
+                                                                {categoryFilter !== 'All' && ` • Category: "${categoryFilter}"`}
+                                                                {teamFilter !== 'All' && ` • Team: "${teamFilter}"`}
+                                                            </p>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSearchQuery('')
+                                                                    setCategoryFilter('All')
+                                                                    setTeamFilter('All')
+                                                                }}
+                                                                className="mt-1 text-xs text-emerald-600 font-bold hover:underline cursor-pointer"
+                                                            >
+                                                                Clear All Filters
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            filteredParticipants.map((p, idx) => {
+                                                const awardTier = getParticipantAwardTier(p)
+                                                const isWinner = awardTier.startsWith('Winner')
+                                                return (
+                                                    <tr key={p.id} className={`hover:bg-slate-50 ${p.selected ? 'bg-emerald-50/20' : 'opacity-60'}`}>
+                                                        <td className="py-2 px-3">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={p.selected}
+                                                                onChange={(e) => {
+                                                                    const check = e.target.checked
+                                                                    setParticipants(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
+                                                                    if (dataSource === 'db') {
+                                                                        setDbParticipantsList(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
+                                                                    } else {
+                                                                        setExcelParticipantsList(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
+                                                                    }
+                                                                }}
+                                                                className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                                            />
+                                                        </td>
+                                                        <td className="py-2 px-3 font-semibold text-gray-900">{p.name}</td>
+                                                        <td className="py-2 px-3 font-mono font-bold text-gray-700">{p.reg_no || <span className="text-amber-500 italic">Missing</span>}</td>
+                                                        <td className="py-2 px-3">
+                                                            <span className="font-medium text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
+                                                                {p.team_name || '—'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-2 px-3 text-gray-600">{p.dept} • {p.year} (Sec {p.section})</td>
+                                                        <td className="py-2 px-3">
+                                                            <select
+                                                                value={p.category}
+                                                                onChange={(e) => updateParticipantCategory(p.id, e.target.value)}
+                                                                className={`text-xs border rounded px-2 py-0.5 font-bold transition-colors ${p.category === 'EE Credit' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                                                    p.category === 'Not Eligible' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+                                                                        'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                                                    }`}
+                                                            >
+                                                                <option value="Group 3">Group 3</option>
+                                                                <option value="EE Credit">EE Credit</option>
+                                                                <option value="Not Eligible">Not Eligible</option>
+                                                            </select>
+                                                        </td>
+                                                        <td className="py-2 px-3">
+                                                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${isWinner
+                                                                ? 'bg-amber-100 text-amber-900 border-amber-300 font-extrabold shadow-sm'
+                                                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                                }`}>
+                                                                <span>{isWinner ? '🏆' : '🎖️'}</span>
+                                                                <span>{awardTier}</span>
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                )
+                                            })
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
