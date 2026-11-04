@@ -53,6 +53,7 @@ interface ParticipantRecord {
     team_name?: string
     category: 'Group 3' | 'EE Credit' | 'Not Eligible' | string
     selected: boolean
+    certificate_code?: string
 }
 
 export type CertificateType = string
@@ -742,6 +743,136 @@ export default function OrganizerCertificatesPage() {
     const [issuedCertificates, setIssuedCertificates] = useState<any[]>([])
     const [loadingIssued, setLoadingIssued] = useState(false)
     const [historySearch, setHistorySearch] = useState('')
+    const certCodeCacheRef = useRef<Map<string, string>>(new Map())
+
+    /**
+     * Deterministic hash generation for offline / Excel participants.
+     * Ensures that even if session cache, browser cache, and cookies are cleared,
+     * the exact same participant (by reg_no / identifier) will mathematically produce
+     * the identical GDG-KARE-XXXX-YYYY certificate code every time.
+     */
+    const generateDeterministicCertCode = (identifier: string, tier: string = ''): string => {
+        const input = `${identifier.trim().toUpperCase()}::${tier.trim().toUpperCase()}::GDG_KARE_EVENT_2026`
+        let h1 = 0xdeadbeef
+        let h2 = 0x41c6ce57
+        for (let i = 0; i < input.length; i++) {
+            const ch = input.charCodeAt(i)
+            h1 = Math.imul(h1 ^ ch, 2654435761)
+            h2 = Math.imul(h2 ^ ch, 1597334677)
+        }
+        h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+        h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+
+        const partA = Math.abs(h1).toString(36).padStart(4, '0').slice(-4).toUpperCase()
+        const partB = Math.abs(h2).toString(36).padStart(4, '0').slice(-4).toUpperCase()
+        return `GDG-KARE-${partA}-${partB}`
+    }
+
+    /**
+     * Resolves the permanent unique certificate code for a participant with 5 resilient tiers:
+     * 1. Reuses existing certificate_code from Supabase DB (issuedCertificates) if registered.
+     * 2. Reuses in-memory session code if already assigned.
+     * 3. Reuses persistent browser localStorage code (survives tab closure & browser restart).
+     * 4. Checks if participant record already carries an assigned certificate_code.
+     * 5. Deterministic Algorithmic Fallback: Computes permanent code from student reg_no/ID
+     *    so that even if cache is completely wiped, the same student always gets the identical code.
+     */
+    const getExistingOrNewCertCode = (p?: ParticipantRecord | null, tier?: string): string => {
+        if (!p) {
+            return generateDeterministicCertCode('PREVIEW_SAMPLE', tier || 'sample')
+        }
+
+        const cleanReg = (p.reg_no || '').trim().toLowerCase()
+        const cleanId = (p.id || '').trim().toLowerCase()
+        const cleanName = (p.name || '').trim().toLowerCase()
+        const targetTier = (tier || '').trim().toLowerCase()
+
+        const specificKey = `${cleanReg || cleanId || cleanName}_${targetTier}`
+        const generalKey = `${cleanReg || cleanId || cleanName}`
+
+        // 1. Check existing DB certificates
+        if (issuedCertificates && issuedCertificates.length > 0) {
+            // First try matching both student AND exact tier
+            const exactDbMatch = issuedCertificates.find(c => {
+                const cReg = (c.reg_no || '').trim().toLowerCase()
+                const cId = (c.user_id || c.id || '').trim().toLowerCase()
+                const cTier = (c.award_tier || c.template_name || '').trim().toLowerCase()
+                const isStudent = (cleanReg && cReg === cleanReg) || (cleanId && cId === cleanId)
+                return isStudent && (!targetTier || cTier === targetTier)
+            })
+
+            if (exactDbMatch?.certificate_code) {
+                certCodeCacheRef.current.set(specificKey, exactDbMatch.certificate_code)
+                return exactDbMatch.certificate_code
+            }
+
+            // Fallback: Match student by reg_no or user_id regardless of tier
+            const studentDbMatch = issuedCertificates.find(c => {
+                const cReg = (c.reg_no || '').trim().toLowerCase()
+                const cId = (c.user_id || c.id || '').trim().toLowerCase()
+                return (cleanReg && cReg === cleanReg) || (cleanId && cId === cleanId)
+            })
+
+            if (studentDbMatch?.certificate_code) {
+                certCodeCacheRef.current.set(specificKey, studentDbMatch.certificate_code)
+                return studentDbMatch.certificate_code
+            }
+        }
+
+        // 2. Check in-memory session cache
+        if (certCodeCacheRef.current.has(specificKey)) {
+            return certCodeCacheRef.current.get(specificKey)!
+        }
+        if (certCodeCacheRef.current.has(generalKey)) {
+            return certCodeCacheRef.current.get(generalKey)!
+        }
+
+        // 3. Check persistent browser localStorage (survives tab closure, browser restart)
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const stored = localStorage.getItem('hackare_cert_codes')
+                if (stored) {
+                    const map = JSON.parse(stored)
+                    if (map[specificKey]) {
+                        certCodeCacheRef.current.set(specificKey, map[specificKey])
+                        return map[specificKey]
+                    }
+                    if (map[generalKey]) {
+                        certCodeCacheRef.current.set(generalKey, map[generalKey])
+                        return map[generalKey]
+                    }
+                }
+            }
+        } catch { }
+
+        // 4. Check if participant object carries an existing certificate_code
+        if ((p as any).certificate_code) {
+            const code = String((p as any).certificate_code)
+            certCodeCacheRef.current.set(specificKey, code)
+            return code
+        }
+
+        // 5. Deterministic Algorithmic Fallback:
+        // Even if all caches, localStorage, and session data are cleared,
+        // this participant's reg_no will mathematically generate the exact same code!
+        const identifier = cleanReg || cleanId || cleanName || 'STUDENT'
+        const newCode = generateDeterministicCertCode(identifier, targetTier)
+
+        // Cache in memory and localStorage for instant lookup
+        certCodeCacheRef.current.set(specificKey, newCode)
+        certCodeCacheRef.current.set(generalKey, newCode)
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const stored = localStorage.getItem('hackare_cert_codes')
+                const map = stored ? JSON.parse(stored) : {}
+                map[specificKey] = newCode
+                map[generalKey] = newCode
+                localStorage.setItem('hackare_cert_codes', JSON.stringify(map))
+            }
+        } catch { }
+
+        return newCode
+    }
 
     // Toast notification
     const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
@@ -1111,6 +1242,17 @@ export default function OrganizerCertificatesPage() {
                     const year = String(findKey(['year', 'academic year']) || '2nd Year').trim()
                     const team_name = String(findKey(['team', 'team name', 'team_name', 'group']) || 'General Cohort').trim()
                     const rowCategory = String(findKey(['category', 'credit', 'type']) || '').trim()
+                    const excelCertCode = String(findKey(['certificate_code', 'certificate_id', 'cert_code', 'cert_id', 'cert id', 'certificate id']) || '').trim()
+
+                    // Cross-check if this student already has a registered certificate code in DB
+                    let matchedDbCertCode = excelCertCode
+                    if (!matchedDbCertCode && reg_no && issuedCertificates.length > 0) {
+                        const cleanReg = reg_no.trim().toLowerCase()
+                        const dbMatch = issuedCertificates.find(c => (c.reg_no || '').trim().toLowerCase() === cleanReg)
+                        if (dbMatch?.certificate_code) {
+                            matchedDbCertCode = dbMatch.certificate_code
+                        }
+                    }
 
                     let assignedCategory: 'Group 3' | 'EE Credit' | 'Not Eligible' = determineCategoryByYear(year)
                     if (rowCategory) {
@@ -1133,7 +1275,8 @@ export default function OrganizerCertificatesPage() {
                         year: year,
                         team_name: team_name,
                         category: assignedCategory,
-                        selected: true
+                        selected: true,
+                        certificate_code: matchedDbCertCode || undefined
                     }
                 })
 
@@ -1603,9 +1746,7 @@ export default function OrganizerCertificatesPage() {
 
         try {
             const signingItems = selected.map(p => {
-                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const certCode = `GDG-KARE-${randA}-${randB}`
+                const certCode = getExistingOrNewCertCode(p, selectedCertType)
                 return {
                     certCode,
                     item: {
@@ -1875,10 +2016,8 @@ export default function OrganizerCertificatesPage() {
             // Cryptographically sign tokens for all participants
             setProgress({ current: 0, total: targets.length, message: 'Signing cryptographic verification tokens...' })
             const signingItems = targets.map(p => {
-                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const certCode = `GDG-KARE-${randA}-${randB}`
                 const tierId = getParticipantAwardTier(p)
+                const certCode = getExistingOrNewCertCode(p, tierId)
                 return {
                     certCode,
                     tierId,
@@ -2114,11 +2253,7 @@ export default function OrganizerCertificatesPage() {
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('Could not create canvas context')
 
-        const certCode = customCertCode || (() => {
-            const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-            const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-            return `GDG-KARE-${randA}-${randB}`
-        })()
+        const certCode = customCertCode || getExistingOrNewCertCode(participant, tierId)
 
         let certToken = token
         if (!certToken) {
@@ -2227,11 +2362,7 @@ export default function OrganizerCertificatesPage() {
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('Could not create canvas context')
 
-        const certCode = customCertCode || (() => {
-            const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-            const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-            return `GDG-KARE-${randA}-${randB}`
-        })()
+        const certCode = customCertCode || getExistingOrNewCertCode(participant, tierId)
 
         let certToken = token
         if (!certToken) {
@@ -2365,9 +2496,7 @@ export default function OrganizerCertificatesPage() {
         setGeneratingPreview(true)
 
         try {
-            const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-            const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-            const certCode = `GDG-KARE-${randA}-${randB}`
+            const certCode = getExistingOrNewCertCode(currentStudent, tierId)
 
             const tokens = await requestCertificateTokens([{
                 id: certCode,
@@ -2536,10 +2665,8 @@ export default function OrganizerCertificatesPage() {
             })
 
             const signingItems = targets.map(p => {
-                const randA = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const randB = Math.random().toString(36).substring(2, 6).toUpperCase()
-                const certCode = `GDG-KARE-${randA}-${randB}`
                 const tierId = getParticipantAwardTier(p)
+                const certCode = getExistingOrNewCertCode(p, tierId)
                 return {
                     certCode,
                     tierId,
@@ -2575,6 +2702,27 @@ export default function OrganizerCertificatesPage() {
                 const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95, undefined, certCode, token)
                 triggerFileDownload(blob, `Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`)
                 showToast('success', `Downloaded PNG certificate for ${p.name}!`)
+
+                // Auto-persist single certificate to Supabase in background
+                fetch('/api/organizer/certificates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        certificates: [{
+                            certificate_code: certCode,
+                            user_id: p.id?.startsWith('excel_') ? null : p.id,
+                            name: p.name,
+                            reg_no: p.reg_no,
+                            dept: p.dept,
+                            section: p.section,
+                            year: p.year,
+                            team_name: p.team_name,
+                            category: p.category,
+                            award_tier: tierId,
+                            template_name: tierId
+                        }]
+                    })
+                }).then(() => fetchIssuedCertificates()).catch(() => {})
                 return
             }
 
@@ -2629,6 +2777,33 @@ export default function OrganizerCertificatesPage() {
 
             triggerFileDownload(zipBlob, `GDG_KARE_${cleanCatName}_PNG_${new Date().toISOString().slice(0, 10)}.zip`)
             showToast('success', `Successfully exported ${targets.length} PNG certificates for "${cat.label}"!`)
+
+            // Auto-persist issued certificates to Supabase DB in background
+            try {
+                const certificatesToPersist = signingItems.map(s => {
+                    const p = targets.find(t => t.reg_no === s.item.reg_no) || s.item
+                    return {
+                        certificate_code: s.certCode,
+                        user_id: p.id?.startsWith('excel_') ? null : p.id,
+                        name: p.name,
+                        reg_no: p.reg_no,
+                        dept: p.dept,
+                        section: p.section,
+                        year: p.year,
+                        team_name: p.team_name,
+                        category: p.category,
+                        award_tier: s.tierId,
+                        template_name: s.tierId
+                    }
+                })
+                fetch('/api/organizer/certificates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ certificates: certificatesToPersist })
+                }).then(() => fetchIssuedCertificates()).catch(() => {})
+            } catch (persistErr) {
+                console.warn('Background cert persist failed:', persistErr)
+            }
         } catch (err: any) {
             console.error('Download PNG category failed:', err)
             showToast('error', `Download error: ${err.message || 'Unknown error'}`)
@@ -2647,8 +2822,27 @@ export default function OrganizerCertificatesPage() {
         try {
             const res = await fetch('/api/organizer/certificates')
             const data = await res.json()
-            if (data.certificates) {
+            if (data.certificates && Array.isArray(data.certificates)) {
                 setIssuedCertificates(data.certificates)
+                for (const c of data.certificates) {
+                    if (c.certificate_code) {
+                        const cleanReg = (c.reg_no || '').trim().toLowerCase()
+                        const cleanId = (c.user_id || c.id || '').trim().toLowerCase()
+                        const cleanName = (c.name || '').trim().toLowerCase()
+                        const tier = (c.award_tier || c.template_name || '').trim().toLowerCase()
+                        if (cleanReg) {
+                            certCodeCacheRef.current.set(`${cleanReg}_${tier}`, c.certificate_code)
+                            certCodeCacheRef.current.set(cleanReg, c.certificate_code)
+                        }
+                        if (cleanId) {
+                            certCodeCacheRef.current.set(`${cleanId}_${tier}`, c.certificate_code)
+                            certCodeCacheRef.current.set(cleanId, c.certificate_code)
+                        }
+                        if (cleanName) {
+                            certCodeCacheRef.current.set(`${cleanName}_${tier}`, c.certificate_code)
+                        }
+                    }
+                }
             }
         } catch (e) {
             console.error('Error fetching issued certificates:', e)

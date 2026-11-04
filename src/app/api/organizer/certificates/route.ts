@@ -114,16 +114,68 @@ export async function POST(request: Request) {
             }
         }))
 
+        // Check for existing certificates in DB to preserve permanent certificate codes across re-generations / updates
+        const regNos = Array.from(new Set(formatted.map(f => f.reg_no).filter(Boolean)))
+        const userIds = Array.from(new Set(formatted.map(f => f.user_id).filter(Boolean)))
+
+        const existingMap = new Map<string, string>() // key -> existing certificate_code
+        try {
+            if (regNos.length > 0) {
+                const { data: existingRecords } = await supabase
+                    .from('certificates')
+                    .select('id, certificate_code, reg_no, user_id, award_tier, template_name')
+                    .in('reg_no', regNos)
+
+                if (existingRecords && Array.isArray(existingRecords)) {
+                    for (const ex of existingRecords) {
+                        if (ex.reg_no && ex.certificate_code) {
+                            const r = ex.reg_no.trim().toLowerCase()
+                            const tier = (ex.award_tier || ex.template_name || '').trim().toLowerCase()
+                            existingMap.set(`${r}_${tier}`, ex.certificate_code)
+                            if (!existingMap.has(r)) {
+                                existingMap.set(r, ex.certificate_code)
+                            }
+                        }
+                        if (ex.user_id && ex.certificate_code) {
+                            const u = ex.user_id.trim().toLowerCase()
+                            const tier = (ex.award_tier || ex.template_name || '').trim().toLowerCase()
+                            existingMap.set(`${u}_${tier}`, ex.certificate_code)
+                            if (!existingMap.has(u)) {
+                                existingMap.set(u, ex.certificate_code)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (fetchErr) {
+            console.warn('Could not query existing certificates:', fetchErr)
+        }
+
+        const normalized = formatted.map(c => {
+            const cleanReg = (c.reg_no || '').trim().toLowerCase()
+            const cleanUser = (c.user_id || '').trim().toLowerCase()
+            const cleanTier = (c.award_tier || c.template_name || '').trim().toLowerCase()
+
+            const existingCode = existingMap.get(`${cleanReg}_${cleanTier}`)
+                || existingMap.get(cleanReg)
+                || (cleanUser ? (existingMap.get(`${cleanUser}_${cleanTier}`) || existingMap.get(cleanUser)) : null)
+
+            return {
+                ...c,
+                certificate_code: existingCode || c.certificate_code
+            }
+        })
+
         // Upsert into certificates table
         let { data, error } = await supabase
             .from('certificates')
-            .upsert(formatted, { onConflict: 'certificate_code' })
+            .upsert(normalized, { onConflict: 'certificate_code' })
             .select()
 
         // If newly added columns (team_name, award_tier, winner_rank) do not exist yet in DB,
         // retry gracefully without them while keeping them in metadata JSONB
         if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('team_name'))) {
-            const stripped = formatted.map(({ team_name, award_tier, winner_rank, ...rest }) => rest)
+            const stripped = normalized.map(({ team_name, award_tier, winner_rank, ...rest }) => rest)
             const fallbackRes = await supabase
                 .from('certificates')
                 .upsert(stripped, { onConflict: 'certificate_code' })
