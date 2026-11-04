@@ -22,6 +22,24 @@ export async function GET(request: Request) {
             }
 
             const isNotEligible = payload.category === 'Not Eligible'
+            let resolvedEventName = payload.event_name
+
+            // If token didn't contain custom event name or has fallback, check centralized database config
+            if (!resolvedEventName || resolvedEventName === 'GDG-KARE Event' || resolvedEventName === 'GDG-KARE Event Management Platform') {
+                try {
+                    const supabase = await createAdminClient()
+                    const { data: cfg } = await supabase
+                        .from('certificate_templates')
+                        .select('*')
+                        .eq('tier', 'event_config')
+                        .maybeSingle()
+
+                    if (cfg) {
+                        const l = (cfg.layout as any) || {}
+                        resolvedEventName = l.dbEventName || cfg.file_name || resolvedEventName || 'GDG-KARE Event'
+                    }
+                } catch { }
+            }
 
             return NextResponse.json({
                 success: true,
@@ -36,7 +54,7 @@ export async function GET(request: Request) {
                     year: payload.year || '—',
                     category: payload.category || 'Group 3',
                     team_name: payload.team_name || '',
-                    event_name: payload.event_name || 'GDG-KARE Event',
+                    event_name: resolvedEventName || 'GDG-KARE Event',
                     is_not_eligible: isNotEligible,
                     certificate_type: payload.type || 'Participation',
                     issue_date: payload.issue_date || (payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString()),
@@ -63,6 +81,24 @@ export async function GET(request: Request) {
 
             if (cert) {
                 const isNotEligible = cert.category === 'Not Eligible' || cert.eligible === false
+                let resolvedEventName = cert.event_name || (cert.metadata && cert.metadata.event_name)
+
+                // If DB record lacks event_name or has generic default, check centralized database config
+                if (!resolvedEventName || resolvedEventName === 'GDG-KARE Event Management Platform') {
+                    try {
+                        const { data: cfg } = await supabase
+                            .from('certificate_templates')
+                            .select('*')
+                            .eq('tier', 'event_config')
+                            .maybeSingle()
+
+                        if (cfg) {
+                            const l = (cfg.layout as any) || {}
+                            resolvedEventName = l.dbEventName || cfg.file_name || resolvedEventName || 'GDG-KARE Event Management Platform'
+                        }
+                    } catch { }
+                }
+
                 return NextResponse.json({
                     success: true,
                     verified: true,
@@ -76,7 +112,7 @@ export async function GET(request: Request) {
                         year: cert.year || '—',
                         category: cert.category || 'Group 3',
                         team_name: cert.team_name || '',
-                        event_name: cert.event_name || (cert.metadata && cert.metadata.event_name) || 'GDG-KARE Event Management Platform',
+                        event_name: resolvedEventName || 'GDG-KARE Event Management Platform',
                         is_not_eligible: isNotEligible,
                         certificate_type: cert.template_name || (cert.metadata && cert.metadata.cert_type) || 'Participation',
                         issue_date: cert.issue_date || cert.created_at,

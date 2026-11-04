@@ -464,6 +464,7 @@ export default function OrganizerCertificatesPage() {
     const [excelEventName, setExcelEventName] = useState<string>('GDG-KARE Event')
     const [isEditingDbEvent, setIsEditingDbEvent] = useState<boolean>(false)
     const [tempDbEventName, setTempDbEventName] = useState<string>('GDG-KARE Event Management Platform')
+    const [savingDbEvent, setSavingDbEvent] = useState<boolean>(false)
 
     const activeEventName = useMemo(() => {
         return dataSource === 'db' ? (dbEventName.trim() || 'GDG-KARE Event Management Platform') : (excelEventName.trim() || 'GDG-KARE Event')
@@ -1119,6 +1120,82 @@ export default function OrganizerCertificatesPage() {
         }
     }
 
+    // Fetch central event configuration from Supabase (synchronizes localhost and live production)
+    const fetchEventConfig = useCallback(async () => {
+        try {
+            const res = await fetch('/api/organizer/event-config')
+            if (res.ok) {
+                const data = await res.json()
+                if (data.success) {
+                    if (data.dbEventName) {
+                        setDbEventName(data.dbEventName)
+                        setTempDbEventName(data.dbEventName)
+                        try {
+                            localStorage.setItem('hackare_db_event_name', data.dbEventName)
+                        } catch { }
+                    }
+                    if (data.excelEventName && data.excelEventName !== 'GDG-KARE Event') {
+                        setExcelEventName(data.excelEventName)
+                        try {
+                            localStorage.setItem('hackare_excel_event_name', data.excelEventName)
+                        } catch { }
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('Could not fetch event config from server:', err)
+        }
+    }, [])
+
+    const handleSaveDbEventName = async (customName?: string) => {
+        const finalName = (customName !== undefined ? customName : tempDbEventName).trim() || 'GDG-KARE Event Management Platform'
+        setDbEventName(finalName)
+        setTempDbEventName(finalName)
+        setIsEditingDbEvent(false)
+
+        try {
+            localStorage.setItem('hackare_db_event_name', finalName)
+        } catch { }
+
+        setSavingDbEvent(true)
+        try {
+            const res = await fetch('/api/organizer/event-config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dbEventName: finalName })
+            })
+            if (res.ok) {
+                showToast('success', 'Event name saved & synchronized to database!')
+            } else {
+                showToast('info', 'Event name updated!')
+            }
+        } catch (err) {
+            console.warn('Could not sync event config to backend:', err)
+            showToast('info', 'Event name updated locally!')
+        } finally {
+            setSavingDbEvent(false)
+        }
+    }
+
+    const handleExcelEventNameChange = (val: string) => {
+        setExcelEventName(val)
+        try {
+            localStorage.setItem('hackare_excel_event_name', val)
+        } catch { }
+    }
+
+    const handleExcelEventNameBlur = async () => {
+        const trimmed = excelEventName.trim()
+        if (!trimmed) return
+        try {
+            await fetch('/api/organizer/event-config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ excelEventName: trimmed })
+            })
+        } catch { }
+    }
+
     // Load saved layout and template from localStorage if exists
     useEffect(() => {
         const saved = localStorage.getItem('hackare_cert_layout')
@@ -1168,6 +1245,7 @@ export default function OrganizerCertificatesPage() {
         fetchDbParticipants()
         fetchIssuedCertificates()
         syncWinningTeamsFromDb()
+        fetchEventConfig()
 
         // Load all saved templates from IndexedDB + Supabase Cloud
         const initTemplates = async () => {
@@ -3123,7 +3201,7 @@ export default function OrganizerCertificatesPage() {
                         <button
                             type="button"
                             onClick={switchToDbMode}
-                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${activeTab === 'studio' && dataSource === 'db'
+                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${dataSource === 'db'
                                 ? 'bg-slate-900 text-white shadow-md'
                                 : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
                                 }`}
@@ -3134,7 +3212,7 @@ export default function OrganizerCertificatesPage() {
                         <button
                             type="button"
                             onClick={switchToExcelMode}
-                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${activeTab === 'studio' && dataSource === 'excel'
+                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${dataSource === 'excel'
                                 ? 'bg-slate-900 text-white shadow-md'
                                 : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
                                 }`}
@@ -3143,25 +3221,6 @@ export default function OrganizerCertificatesPage() {
                             <span>Generate Certificates from Excel Sheet</span>
                         </button>
                     </div>
-
-                    <button
-                        type="button"
-                        onClick={() => {
-                            if (activeTab === 'history') {
-                                setActiveTab('studio')
-                            } else {
-                                setActiveTab('history')
-                                fetchIssuedCertificates()
-                            }
-                        }}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${activeTab === 'history'
-                            ? 'bg-slate-900 text-white border-slate-900 shadow-md'
-                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'
-                            }`}
-                        title="View previously issued certificates"
-                    >
-
-                    </button>
                 </div>
             </div>
 
@@ -3553,23 +3612,6 @@ export default function OrganizerCertificatesPage() {
                                                 <Edit3 size={13} />
                                                 <span>Edit Event Name</span>
                                             </button>
-                                            {dbEventName !== 'GDG-KARE Event Management Platform' && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setDbEventName('GDG-KARE Event Management Platform')
-                                                        setTempDbEventName('GDG-KARE Event Management Platform')
-                                                        try {
-                                                            localStorage.removeItem('hackare_db_event_name')
-                                                        } catch { }
-                                                        setToast({ type: 'info', message: 'Event name reset to default' })
-                                                    }}
-                                                    className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
-                                                    title="Reset to default event name"
-                                                >
-                                                    Reset
-                                                </button>
-                                            )}
                                         </div>
                                     </div>
                                 ) : (
@@ -3593,13 +3635,7 @@ export default function OrganizerCertificatesPage() {
                                                 onChange={(e) => setTempDbEventName(e.target.value)}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Enter') {
-                                                        const finalName = tempDbEventName.trim() || 'GDG-KARE Event Management Platform'
-                                                        setDbEventName(finalName)
-                                                        try {
-                                                            localStorage.setItem('hackare_db_event_name', finalName)
-                                                        } catch { }
-                                                        setIsEditingDbEvent(false)
-                                                        setToast({ type: 'success', message: 'Event name updated!' })
+                                                        handleSaveDbEventName()
                                                     } else if (e.key === 'Escape') {
                                                         setIsEditingDbEvent(false)
                                                     }
@@ -3611,34 +3647,16 @@ export default function OrganizerCertificatesPage() {
                                             <div className="flex items-center gap-2">
                                                 <button
                                                     type="button"
-                                                    onClick={() => {
-                                                        const finalName = tempDbEventName.trim() || 'GDG-KARE Event Management Platform'
-                                                        setDbEventName(finalName)
-                                                        try {
-                                                            localStorage.setItem('hackare_db_event_name', finalName)
-                                                        } catch { }
-                                                        setIsEditingDbEvent(false)
-                                                        setToast({ type: 'success', message: 'Event name updated!' })
-                                                    }}
-                                                    className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                                                    disabled={savingDbEvent}
+                                                    onClick={() => handleSaveDbEventName()}
+                                                    className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
                                                 >
-                                                    <Check size={13} />
-                                                    <span>Save</span>
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setTempDbEventName('GDG-KARE Event Management Platform')
-                                                        setDbEventName('GDG-KARE Event Management Platform')
-                                                        try {
-                                                            localStorage.removeItem('hackare_db_event_name')
-                                                        } catch { }
-                                                        setIsEditingDbEvent(false)
-                                                        setToast({ type: 'info', message: 'Reset to default event name' })
-                                                    }}
-                                                    className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                                                >
-                                                    Reset
+                                                    {savingDbEvent ? (
+                                                        <RefreshCw size={13} className="animate-spin" />
+                                                    ) : (
+                                                        <Check size={13} />
+                                                    )}
+                                                    <span>{savingDbEvent ? 'Saving...' : 'Save'}</span>
                                                 </button>
                                                 <button
                                                     type="button"
@@ -3651,7 +3669,7 @@ export default function OrganizerCertificatesPage() {
                                             </div>
                                         </div>
                                         <p className="text-[11px] text-gray-500">
-                                            Press <kbd className="px-1 py-0.5 bg-slate-200 rounded text-[10px]">Enter</kbd> to save. This name will be cryptographically signed into each certificate&apos;s QR code and displayed to anyone who verifies or scans the certificate.
+                                            Press <kbd className="px-1 py-0.5 bg-slate-200 rounded text-[10px]">Enter</kbd> to save. This name will be synced to the database, signed into each certificate&apos;s QR code, and displayed on scanner verification.
                                         </p>
                                     </div>
                                 )}
@@ -3677,12 +3695,8 @@ export default function OrganizerCertificatesPage() {
                                         id="excel-event-name-input"
                                         type="text"
                                         value={excelEventName}
-                                        onChange={(e) => {
-                                            setExcelEventName(e.target.value)
-                                            try {
-                                                localStorage.setItem('hackare_excel_event_name', e.target.value)
-                                            } catch { }
-                                        }}
+                                        onChange={(e) => handleExcelEventNameChange(e.target.value)}
+                                        onBlur={handleExcelEventNameBlur}
                                         placeholder="Enter Event Name (e.g., HackKare 2026, AI & ML Bootcamp, Web3 Summit...)"
                                         className="w-full px-3.5 py-2.5 bg-white border border-emerald-300 rounded-xl text-xs font-bold text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-emerald-500 focus:outline-none shadow-xs"
                                     />
