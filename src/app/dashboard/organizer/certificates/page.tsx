@@ -495,13 +495,19 @@ export default function OrganizerCertificatesPage() {
     // Winning Teams Configuration & Dynamic Tiers (Separated for DB vs Excel)
     const [dbWinnerCount, setDbWinnerCount] = useState<number>(3)
     const [dbWinningTeams, setDbWinningTeams] = useState<string[]>(['', '', ''])
+    const [dbSpecialMentionTeams, setDbSpecialMentionTeams] = useState<string[]>([''])
     const [excelWinnerCount, setExcelWinnerCount] = useState<number>(3)
     const [excelWinningTeams, setExcelWinningTeams] = useState<string[]>(['', '', ''])
+    const [excelSpecialMentionTeams, setExcelSpecialMentionTeams] = useState<string[]>([''])
 
     // Dynamically derive active winning teams and count based on dataSource
     const winningTeams = useMemo(() => {
         return dataSource === 'db' ? dbWinningTeams : excelWinningTeams
     }, [dataSource, dbWinningTeams, excelWinningTeams])
+
+    const specialMentionTeams = useMemo(() => {
+        return dataSource === 'db' ? dbSpecialMentionTeams : excelSpecialMentionTeams
+    }, [dataSource, dbSpecialMentionTeams, excelSpecialMentionTeams])
 
     const winnerCount = useMemo(() => {
         return dataSource === 'db' ? dbWinnerCount : excelWinnerCount
@@ -516,14 +522,19 @@ export default function OrganizerCertificatesPage() {
         return list
     }, [winnerCount])
 
-    // Helper: determine a participant's assigned award tier based on winningTeams
+    // Helper: determine a participant's assigned award tier based on winningTeams and specialMentionTeams
     const getParticipantAwardTier = (p: ParticipantRecord): string => {
         if (!p.team_name || p.team_name === '—' || p.team_name === 'Unassigned') {
             return 'Participation'
         }
-        const idx = winningTeams.findIndex(t => t && t.trim().toLowerCase() === p.team_name?.trim().toLowerCase())
+        const pTeam = p.team_name.trim().toLowerCase()
+        const idx = winningTeams.findIndex(t => t && t.trim().toLowerCase() === pTeam)
         if (idx !== -1) {
             return getTierForRank(idx + 1).id
+        }
+        const isSm = specialMentionTeams.some(t => t && t.trim().toLowerCase() === pTeam)
+        if (isSm) {
+            return 'Special Mention'
         }
         return 'Participation'
     }
@@ -590,7 +601,21 @@ export default function OrganizerCertificatesPage() {
             })
         }
 
-        // 3. All Categories option (Full batch including all registered participants)
+        // 3. Special Mention / Finalists Category
+        const smParticipants = allParticipants.filter(p => getParticipantAwardTier(p) === 'Special Mention')
+        const activeSmTeams = specialMentionTeams.filter(t => t && t.trim())
+        list.push({
+            id: 'special_mention',
+            tierId: 'Special Mention',
+            label: 'Special Mention / Finalists',
+            shortName: 'Special Mention',
+            icon: '⭐',
+            teamName: activeSmTeams.length > 0 ? activeSmTeams.join(', ') : 'Unassigned',
+            count: smParticipants.length,
+            accentColor: '#a855f7'
+        })
+
+        // 4. All Categories option (Full batch including all registered participants)
         list.push({
             id: 'all',
             tierId: 'All',
@@ -602,7 +627,7 @@ export default function OrganizerCertificatesPage() {
         })
 
         return list
-    }, [participants, winnerCount, winningTeams, teamMembersMap])
+    }, [participants, winnerCount, winningTeams, specialMentionTeams, teamMembersMap])
 
     const handleWinnerCountChange = (count: number) => {
         const clamped = Math.max(1, Math.min(25, count))
@@ -656,6 +681,73 @@ export default function OrganizerCertificatesPage() {
         }
         if (teamName) {
             showToast('success', `Assigned ${teamName} as ${getOrdinal(rankIndex + 1)} Place Winner!`)
+        }
+    }
+
+    const updateSpecialMentionTeam = (index: number, teamName: string) => {
+        if (dataSource === 'db') {
+            setDbSpecialMentionTeams(prev => {
+                const next = [...prev]
+                next[index] = teamName
+                try {
+                    localStorage.setItem('hackare_db_special_mention_teams', JSON.stringify(next))
+                } catch { }
+                return next
+            })
+        } else {
+            setExcelSpecialMentionTeams(prev => {
+                const next = [...prev]
+                next[index] = teamName
+                try {
+                    localStorage.setItem('hackare_excel_special_mention_teams', JSON.stringify(next))
+                } catch { }
+                return next
+            })
+        }
+        if (teamName) {
+            showToast('success', `Assigned ${teamName} to Special Mention / Finalist!`)
+        }
+    }
+
+    const addSpecialMentionSlot = () => {
+        if (dataSource === 'db') {
+            setDbSpecialMentionTeams(prev => {
+                const next = [...prev, '']
+                try {
+                    localStorage.setItem('hackare_db_special_mention_teams', JSON.stringify(next))
+                } catch { }
+                return next
+            })
+        } else {
+            setExcelSpecialMentionTeams(prev => {
+                const next = [...prev, '']
+                try {
+                    localStorage.setItem('hackare_excel_special_mention_teams', JSON.stringify(next))
+                } catch { }
+                return next
+            })
+        }
+    }
+
+    const removeSpecialMentionSlot = (index: number) => {
+        if (dataSource === 'db') {
+            setDbSpecialMentionTeams(prev => {
+                const next = prev.filter((_, i) => i !== index)
+                const finalNext = next.length === 0 ? [''] : next
+                try {
+                    localStorage.setItem('hackare_db_special_mention_teams', JSON.stringify(finalNext))
+                } catch { }
+                return finalNext
+            })
+        } else {
+            setExcelSpecialMentionTeams(prev => {
+                const next = prev.filter((_, i) => i !== index)
+                const finalNext = next.length === 0 ? [''] : next
+                try {
+                    localStorage.setItem('hackare_excel_special_mention_teams', JSON.stringify(finalNext))
+                } catch { }
+                return finalNext
+            })
         }
     }
 
@@ -1014,9 +1106,15 @@ export default function OrganizerCertificatesPage() {
                     if (typeof data.winnerCount === 'number') {
                         setDbWinnerCount(data.winnerCount)
                     }
+                    if (Array.isArray(data.specialMentionTeams) && data.specialMentionTeams.length > 0) {
+                        setDbSpecialMentionTeams(data.specialMentionTeams)
+                    }
                     try {
                         localStorage.setItem('hackare_db_winner_count', String(data.winnerCount || 3))
                         localStorage.setItem('hackare_db_winning_teams', JSON.stringify(data.winningTeams))
+                        if (Array.isArray(data.specialMentionTeams)) {
+                            localStorage.setItem('hackare_db_special_mention_teams', JSON.stringify(data.specialMentionTeams))
+                        }
                     } catch { }
                     return
                 }
@@ -1037,6 +1135,11 @@ export default function OrganizerCertificatesPage() {
                 const parsed = JSON.parse(savedTeams)
                 if (Array.isArray(parsed)) setDbWinningTeams(parsed)
             }
+            const savedSm = localStorage.getItem('hackare_db_special_mention_teams')
+            if (savedSm) {
+                const parsed = JSON.parse(savedSm)
+                if (Array.isArray(parsed) && parsed.length > 0) setDbSpecialMentionTeams(parsed)
+            }
         } catch { }
     }, [])
 
@@ -1052,6 +1155,7 @@ export default function OrganizerCertificatesPage() {
             try {
                 localStorage.setItem('hackare_db_winner_count', String(dbWinnerCount))
                 localStorage.setItem('hackare_db_winning_teams', JSON.stringify(dbWinningTeams))
+                localStorage.setItem('hackare_db_special_mention_teams', JSON.stringify(dbSpecialMentionTeams))
             } catch { }
 
             // 2. Persist to Supabase DB via PUT /api/organizer/winning-teams
@@ -1060,7 +1164,8 @@ export default function OrganizerCertificatesPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     winnerCount: dbWinnerCount,
-                    winningTeams: dbWinningTeams
+                    winningTeams: dbWinningTeams,
+                    specialMentionTeams: dbSpecialMentionTeams
                 })
             })
 
@@ -1085,6 +1190,13 @@ export default function OrganizerCertificatesPage() {
                     details.push(`⚪ Rank ${rank} (${ordinal} Place): [Not Assigned Yet]`)
                 }
             }
+
+            // Also compile Special Mention teams into details summary
+            const activeSmTeams = dbSpecialMentionTeams.filter(t => t && t.trim())
+            activeSmTeams.forEach((team, smIdx) => {
+                const membersCount = teamMembersMap.get(team)?.length || 0
+                details.push(`⭐ Special Mention #${smIdx + 1}: ${team} — ${membersCount} student${membersCount === 1 ? '' : 's'}`)
+            })
 
             // 4. Refresh DB participant records
             fetchDbParticipants()
@@ -1232,6 +1344,11 @@ export default function OrganizerCertificatesPage() {
                 const parsed = JSON.parse(savedExcelTeams)
                 if (Array.isArray(parsed)) setExcelWinningTeams(parsed)
             }
+            const savedExcelSm = localStorage.getItem('hackare_excel_special_mention_teams')
+            if (savedExcelSm) {
+                const parsed = JSON.parse(savedExcelSm)
+                if (Array.isArray(parsed) && parsed.length > 0) setExcelSpecialMentionTeams(parsed)
+            }
             const savedExcelEvent = localStorage.getItem('hackare_excel_event_name')
             if (savedExcelEvent) setExcelEventName(savedExcelEvent)
 
@@ -1239,6 +1356,11 @@ export default function OrganizerCertificatesPage() {
             if (savedDbEvent) {
                 setDbEventName(savedDbEvent)
                 setTempDbEventName(savedDbEvent)
+            }
+            const savedDbSm = localStorage.getItem('hackare_db_special_mention_teams')
+            if (savedDbSm) {
+                const parsed = JSON.parse(savedDbSm)
+                if (Array.isArray(parsed) && parsed.length > 0) setDbSpecialMentionTeams(parsed)
             }
         } catch { }
 
@@ -3510,24 +3632,191 @@ export default function OrganizerCertificatesPage() {
                             })}
                         </div>
 
+                        {/* Special Mention / Finalist Category Team Selection */}
+                        <div className="pt-4 border-t border-dashed border-gray-200">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                                <div className="flex items-center gap-2.5">
+                                    <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center font-bold text-base shrink-0">
+                                        ⭐
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xs sm:text-sm font-bold text-gray-900 flex items-center gap-2">
+                                            <span>Special Mention / Finalist Category</span>
+                                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-700 border border-purple-200">
+                                                {specialMentionTeams.filter(t => t && t.trim()).length} Team{specialMentionTeams.filter(t => t && t.trim()).length === 1 ? '' : 's'} Selected
+                                            </span>
+                                        </h3>
+                                        <p className="text-[11px] text-gray-500">
+                                            Select teams recognized for Special Mention or Finalist awards. Members will receive official Special Recognition certificates!
+                                        </p>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={addSpecialMentionSlot}
+                                    className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all self-start sm:self-auto cursor-pointer"
+                                >
+                                    <Plus size={13} />
+                                    <span>Add Special Mention Team</span>
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {specialMentionTeams.map((assignedTeam, smIdx) => {
+                                    const members = assignedTeam ? teamMembersMap.get(assignedTeam) || [] : []
+                                    const isCurrentlyActiveTier = selectedCertType === 'Special Mention'
+
+                                    return (
+                                        <div
+                                            key={`sm_${smIdx}`}
+                                            className={`rounded-xl border p-4 transition-all flex flex-col justify-between gap-3 ${assignedTeam
+                                                ? 'bg-slate-900 text-white border-purple-600/80 shadow-md ring-1 ring-purple-500/30'
+                                                : 'bg-purple-50/40 border-dashed border-purple-300 text-gray-800'
+                                                }`}
+                                        >
+                                            <div>
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xl">⭐</span>
+                                                        <div>
+                                                            <h4 className={`text-xs font-bold ${assignedTeam ? 'text-purple-300' : 'text-gray-900'}`}>
+                                                                Special Mention {specialMentionTeams.length > 1 ? `#${smIdx + 1}` : ''}
+                                                            </h4>
+                                                            <span className="text-[10px] text-gray-400">
+                                                                Special Recognition / Finalist
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        {assignedTeam && (
+                                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                                                {members.length} Members
+                                                            </span>
+                                                        )}
+                                                        {specialMentionTeams.length > 1 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeSpecialMentionSlot(smIdx)}
+                                                                className="text-gray-400 hover:text-rose-400 p-0.5 rounded transition-colors cursor-pointer"
+                                                                title="Remove slot"
+                                                            >
+                                                                <X size={13} />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* Team Selector Dropdown */}
+                                                <div className="mt-2">
+                                                    <select
+                                                        value={assignedTeam}
+                                                        onChange={(e) => updateSpecialMentionTeam(smIdx, e.target.value)}
+                                                        className={`w-full text-xs font-semibold rounded-lg px-3 py-2 border transition-all cursor-pointer ${assignedTeam
+                                                            ? 'bg-slate-800 text-white border-purple-600 focus:ring-2 focus:ring-purple-400'
+                                                            : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-purple-500'
+                                                            }`}
+                                                    >
+                                                        <option value="">-- Choose Special Mention Team --</option>
+                                                        {uniqueTeams.map(t => {
+                                                            const winIndex = winningTeams.findIndex(wt => wt === t)
+                                                            const isRankWinner = winIndex !== -1
+                                                            const otherSmIndex = specialMentionTeams.findIndex((st, i) => i !== smIdx && st === t)
+                                                            const isOtherSm = otherSmIndex !== -1
+                                                            const isAlreadyTaken = isRankWinner || isOtherSm
+                                                            return (
+                                                                <option
+                                                                    key={t}
+                                                                    value={t}
+                                                                    disabled={isAlreadyTaken}
+                                                                >
+                                                                    {t} {isRankWinner ? `(${getOrdinal(winIndex + 1)} Place Winner)` : isOtherSm ? `(Special Mention #${otherSmIndex + 1})` : `(${teamMembersMap.get(t)?.length || 0} students)`}
+                                                                </option>
+                                                            )
+                                                        })}
+                                                    </select>
+                                                </div>
+
+                                                {/* Assigned Team Members Preview */}
+                                                {assignedTeam ? (
+                                                    <div className="mt-2.5 pt-2 border-t border-slate-800">
+                                                        <div className="text-[10px] text-purple-300/80 mb-1 font-semibold flex items-center justify-between">
+                                                            <span>Team Members:</span>
+                                                            <span className="text-purple-300">{members.length} students</span>
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                                                            {members.map(m => (
+                                                                <span
+                                                                    key={m.id}
+                                                                    className="inline-block bg-purple-900/40 text-purple-200 border border-purple-800 px-2 py-0.5 rounded text-[10px]"
+                                                                    title={`${m.name} (${m.reg_no})`}
+                                                                >
+                                                                    {m.name}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-[11px] text-gray-500 italic mt-2">
+                                                        Select a team above to award Special Mention.
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            {/* Card Actions */}
+                                            <div className="flex items-center justify-between pt-2 border-t border-gray-200/20 text-xs">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleSwitchCertType('Special Mention')}
+                                                    className={`text-[11px] font-bold px-2 py-1 rounded transition-colors flex items-center gap-1 cursor-pointer ${isCurrentlyActiveTier
+                                                        ? 'bg-purple-500 text-white font-black'
+                                                        : assignedTeam
+                                                            ? 'text-purple-300 hover:text-white bg-slate-800 hover:bg-slate-700'
+                                                            : 'text-purple-700 hover:text-purple-900 bg-purple-100 hover:bg-purple-200'
+                                                        }`}
+                                                >
+                                                    <span>🎨</span>
+                                                    <span>{isCurrentlyActiveTier ? 'Active Template' : 'Edit Template'}</span>
+                                                </button>
+
+                                                {assignedTeam && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setTeamFilter(assignedTeam)}
+                                                        className="text-[11px] text-purple-300 hover:text-white underline decoration-purple-500 font-medium cursor-pointer"
+                                                    >
+                                                        View Members
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+
                         {/* Winning Teams Footer Summary Status */}
                         <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
                             <div className="flex items-center gap-3">
                                 <span className="text-gray-600 font-medium">
                                     Winning Ranks Assigned: <strong className="text-gray-900 font-bold">{winningTeams.filter(t => t && t.trim()).length} of {winnerCount}</strong>
+                                    {specialMentionTeams.filter(t => t && t.trim()).length > 0 && (
+                                        <span className="ml-2 text-purple-700 font-bold">
+                                            + {specialMentionTeams.filter(t => t && t.trim()).length} Special Mention
+                                        </span>
+                                    )}
                                 </span>
-                                {winningTeams.filter(t => t && t.trim()).length > 0 ? (
+                                {(winningTeams.filter(t => t && t.trim()).length > 0 || specialMentionTeams.filter(t => t && t.trim()).length > 0) ? (
                                     <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-300">
                                         ● Configured & Ready
                                     </span>
                                 ) : (
                                     <span className="text-gray-400 text-[11px]">
-                                        Select winning teams above, then click the top &quot;Save Winning Teams to DB&quot; button.
+                                        Select winning & special mention teams above, then click &quot;Save Winning Teams to DB&quot;.
                                     </span>
                                 )}
                             </div>
                             <span className="text-[11px] text-gray-500 font-medium hidden sm:inline">
-                                Members of assigned teams will receive official rank certificates automatically.
+                                Members of assigned teams will receive official rank or special mention certificates automatically.
                             </span>
                         </div>
                     </div>

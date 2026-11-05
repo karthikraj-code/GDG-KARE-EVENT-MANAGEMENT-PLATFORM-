@@ -28,9 +28,15 @@ export async function GET() {
             .order('rank', { ascending: true })
 
         if (!wtError && wtData && wtData.length > 0) {
-            const maxRank = Math.max(...wtData.map(w => w.rank), 3)
+            const specialMentionTeams: string[] = wtData
+                .filter(w => w.award_title === 'Special Mention' || w.rank >= 90)
+                .sort((a, b) => a.rank - b.rank)
+                .map(w => w.team_name)
+
+            const regularWinners = wtData.filter(w => w.award_title !== 'Special Mention' && w.rank < 90)
+            const maxRank = regularWinners.length > 0 ? Math.max(...regularWinners.map(w => w.rank), 3) : 3
             const winningTeams: string[] = Array(maxRank).fill('')
-            wtData.forEach(w => {
+            regularWinners.forEach(w => {
                 if (w.rank >= 1 && w.rank <= maxRank) {
                     winningTeams[w.rank - 1] = w.team_name
                 }
@@ -38,7 +44,8 @@ export async function GET() {
             return NextResponse.json({
                 success: true,
                 winnerCount: maxRank,
-                winningTeams
+                winningTeams,
+                specialMentionTeams: specialMentionTeams.length > 0 ? specialMentionTeams : ['']
             })
         }
 
@@ -50,9 +57,15 @@ export async function GET() {
             .order('winner_rank', { ascending: true })
 
         if (teamsData && teamsData.length > 0) {
-            const maxRank = Math.max(...teamsData.map((t: any) => t.winner_rank || 1), 3)
+            const regularWinners = teamsData.filter((t: any) => t.winner_rank < 90)
+            const specialMentionTeams = teamsData
+                .filter((t: any) => t.winner_rank >= 90)
+                .sort((a: any, b: any) => a.winner_rank - b.winner_rank)
+                .map((t: any) => t.team_name)
+
+            const maxRank = regularWinners.length > 0 ? Math.max(...regularWinners.map((t: any) => t.winner_rank || 1), 3) : 3
             const winningTeams: string[] = Array(maxRank).fill('')
-            teamsData.forEach((t: any) => {
+            regularWinners.forEach((t: any) => {
                 if (t.winner_rank >= 1 && t.winner_rank <= maxRank) {
                     winningTeams[t.winner_rank - 1] = t.team_name
                 }
@@ -60,14 +73,16 @@ export async function GET() {
             return NextResponse.json({
                 success: true,
                 winnerCount: maxRank,
-                winningTeams
+                winningTeams,
+                specialMentionTeams: specialMentionTeams.length > 0 ? specialMentionTeams : ['']
             })
         }
 
         return NextResponse.json({
             success: true,
             winnerCount: 3,
-            winningTeams: ['', '', '']
+            winningTeams: ['', '', ''],
+            specialMentionTeams: ['']
         })
     } catch (err: any) {
         console.error('Error fetching winning teams:', err)
@@ -93,7 +108,7 @@ export async function PUT(request: Request) {
         }
 
         const body = await request.json()
-        const { winnerCount, winningTeams } = body
+        const { winnerCount, winningTeams, specialMentionTeams } = body
 
         if (!Array.isArray(winningTeams)) {
             return NextResponse.json({ error: 'winningTeams must be an array' }, { status: 400 })
@@ -109,7 +124,7 @@ export async function PUT(request: Request) {
                 .update({ winner_rank: null })
                 .not('winner_rank', 'is', null)
 
-            // Set new ranks
+            // Set new ranks for regular winners
             for (let i = 0; i < count; i++) {
                 const teamName = (winningTeams[i] || '').trim()
                 if (teamName) {
@@ -117,6 +132,19 @@ export async function PUT(request: Request) {
                         .from('teams')
                         .update({ winner_rank: i + 1 })
                         .ilike('team_name', teamName)
+                }
+            }
+
+            // Set ranks for special mention teams
+            if (Array.isArray(specialMentionTeams)) {
+                for (let i = 0; i < specialMentionTeams.length; i++) {
+                    const smTeam = (specialMentionTeams[i] || '').trim()
+                    if (smTeam) {
+                        await supabase
+                            .from('teams')
+                            .update({ winner_rank: 90 + i })
+                            .ilike('team_name', smTeam)
+                    }
                 }
             }
         } catch (teamErr) {
@@ -145,6 +173,20 @@ export async function PUT(request: Request) {
                 }
             }
 
+            if (Array.isArray(specialMentionTeams)) {
+                for (let i = 0; i < specialMentionTeams.length; i++) {
+                    const smTeam = (specialMentionTeams[i] || '').trim()
+                    if (smTeam) {
+                        rowsToInsert.push({
+                            rank: 90 + i,
+                            team_name: smTeam,
+                            award_title: 'Special Mention',
+                            updated_at: new Date().toISOString()
+                        })
+                    }
+                }
+            }
+
             if (rowsToInsert.length > 0) {
                 await supabase
                     .from('winning_teams')
@@ -158,7 +200,8 @@ export async function PUT(request: Request) {
             success: true,
             winnerCount: count,
             winningTeams: winningTeams.slice(0, count),
-            message: `Successfully saved ${winningTeams.filter(t => t && t.trim()).length} winning teams to Supabase database!`
+            specialMentionTeams: Array.isArray(specialMentionTeams) ? specialMentionTeams : [],
+            message: `Successfully saved ${winningTeams.filter(t => t && t.trim()).length} winning teams and ${Array.isArray(specialMentionTeams) ? specialMentionTeams.filter(t => t && t.trim()).length : 0} special mention teams to Supabase database!`
         })
     } catch (err: any) {
         console.error('Error updating winning teams in database:', err)
