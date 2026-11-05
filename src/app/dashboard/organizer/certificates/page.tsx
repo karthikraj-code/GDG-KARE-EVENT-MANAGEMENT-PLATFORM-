@@ -36,13 +36,25 @@ import {
     Plus,
     ChevronLeft,
     ChevronRight,
-    Edit3
+    Edit3,
+    Mail,
+    Send,
+    Loader2,
+    Code
 } from 'lucide-react'
 import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import Link from 'next/link'
+import {
+    CERTIFICATE_PARTICIPATION_TEMPLATE,
+    CERTIFICATE_WINNER_TEMPLATE,
+    CERTIFICATE_SPECIAL_MENTION_TEMPLATE,
+    GOOGLE_CERTIFICATE_EMAIL_TEMPLATE,
+    CERTIFICATE_STUDIO_PLACEHOLDERS,
+    replacePlaceholders
+} from '@/lib/mail/templates'
 
 interface ParticipantRecord {
     id: string
@@ -55,6 +67,7 @@ interface ParticipantRecord {
     category: 'Group 3' | 'EE Credit' | 'Not Eligible' | string
     selected: boolean
     certificate_code?: string
+    email?: string
 }
 
 export type CertificateType = string
@@ -1083,17 +1096,83 @@ export default function OrganizerCertificatesPage() {
     const [savingPreviewTuner, setSavingPreviewTuner] = useState<boolean>(false)
     const [previewTunerSavedSuccess, setPreviewTunerSavedSuccess] = useState<boolean>(false)
 
+    // Direct Certificate Email Dispatch States
+    const [sendingEmailId, setSendingEmailId] = useState<string | null>(null)
+    const [certMailStudioModal, setCertMailStudioModal] = useState<{
+        isOpen: boolean
+        mode: 'single' | 'bulk'
+        participant?: ParticipantRecord | null
+        targets: ParticipantRecord[]
+        subject: string
+        bodyHtml: string
+        editorTab: 'preview' | 'code'
+        customEmail?: string
+    } | null>(null)
+    const [certMailAckModal, setCertMailAckModal] = useState<{
+        isOpen: boolean
+        mode: 'single' | 'bulk'
+        participant?: ParticipantRecord | null
+        targetEmail?: string
+        certCode?: string
+        attachmentFilename?: string
+        subject?: string
+        timestamp: string
+        totalSent?: number
+        totalFailed?: number
+        errors?: string[]
+        recipients?: { name: string; email: string; reg_no: string; certCode: string }[]
+    } | null>(null)
+    const [copiedAckCertCode, setCopiedAckCertCode] = useState(false)
+    const [manualEmailModal, setManualEmailModal] = useState<{
+        isOpen: boolean
+        participant: ParticipantRecord | null
+        emailInput: string
+    } | null>(null)
+    const [bulkEmailConfirmModal, setBulkEmailConfirmModal] = useState<{
+        isOpen: boolean
+        categoryLabel: string
+        targets: ParticipantRecord[]
+    } | null>(null)
+    const [isBulkSendingMail, setIsBulkSendingMail] = useState(false)
+    const [bulkMailProgress, setBulkMailProgress] = useState<{
+        isOpen: boolean
+        total: number
+        current: number
+        sent: number
+        failed: number
+        currentName: string
+        isComplete: boolean
+        errors: string[]
+    }>({
+        isOpen: false,
+        total: 0,
+        current: 0,
+        sent: 0,
+        failed: 0,
+        currentName: '',
+        isComplete: false,
+        errors: []
+    })
+
     // Close modal on Escape key
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
+                if (certMailAckModal?.isOpen) {
+                    setCertMailAckModal(null)
+                    return
+                }
+                if (certMailStudioModal?.isOpen) {
+                    setCertMailStudioModal(null)
+                    return
+                }
                 setPopupModal(null)
                 setPreviewModal(null)
             }
         }
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [])
+    }, [certMailStudioModal, certMailAckModal])
 
     // Fetch and synchronize DB winning teams from Supabase database
     const syncWinningTeamsFromDb = useCallback(async () => {
@@ -1488,7 +1567,8 @@ export default function OrganizerCertificatesPage() {
                     year: s.year || '2026',
                     team_name: s.team?.team_name || (typeof s.team === 'string' ? s.team : '') || 'Unassigned',
                     category: s.category || determineCategoryByYear(s.year),
-                    selected: true
+                    selected: true,
+                    email: s.email || ''
                 }))
                 setDbParticipantsList(formatted)
                 try {
@@ -1599,6 +1679,7 @@ export default function OrganizerCertificatesPage() {
                     const rowCategory = String(findKey(['category', 'credit', 'type']) || '').trim()
                     const rowEvent = String(findKey(['event', 'event name', 'event_name', 'event title', 'competition']) || '').trim()
                     const excelCertCode = String(findKey(['certificate_code', 'certificate_id', 'cert_code', 'cert_id', 'cert id', 'certificate id']) || '').trim()
+                    const email = String(findKey(['email', 'mail', 'email address', 'e-mail', 'mail id', 'mail_id', 'email_id', 'student email']) || '').trim()
 
                     if (rowEvent && index === 0) {
                         setExcelEventName(rowEvent)
@@ -1632,7 +1713,8 @@ export default function OrganizerCertificatesPage() {
                         team_name: team_name,
                         category: assignedCategory,
                         selected: true,
-                        certificate_code: finalExcelCertCode
+                        certificate_code: finalExcelCertCode,
+                        email: email || undefined
                     }
                 })
 
@@ -3193,6 +3275,321 @@ export default function OrganizerCertificatesPage() {
         } finally {
             setDownloadingCategory(false)
             setDownloadProgress(prev => ({ ...prev, isOpen: false }))
+        }
+    }
+
+    // =========================================================================
+    // CERTIFICATE EMAIL STUDIO & DISPATCH FUNCTIONS
+    // =========================================================================
+    const openCertMailStudio = (target: ParticipantRecord | ParticipantRecord[]) => {
+        if (Array.isArray(target)) {
+            if (target.length === 0) {
+                showToast('error', 'Please select at least one candidate first.')
+                return
+            }
+            const sample = target[0]
+            const sampleTier = getParticipantAwardTier(sample)
+            let defaultSubject = `🎓 Official Certificate of Participation for ${activeEventName} - {{participant_name}}`
+            if (sampleTier.toLowerCase().includes('winner')) {
+                defaultSubject = `🏆 Congratulations! Winner Certificate for ${activeEventName} - {{participant_name}}`
+            } else if (sampleTier.toLowerCase().includes('special mention')) {
+                defaultSubject = `⭐ Special Recognition Honors for ${activeEventName} - {{participant_name}}`
+            }
+
+            setCertMailStudioModal({
+                isOpen: true,
+                mode: 'bulk',
+                participant: sample,
+                targets: target,
+                subject: defaultSubject,
+                bodyHtml: GOOGLE_CERTIFICATE_EMAIL_TEMPLATE,
+                editorTab: 'preview',
+                customEmail: ''
+            })
+        } else {
+            const pTier = getParticipantAwardTier(target)
+            let subject = `🎓 Official Certificate of Participation for ${activeEventName} - ${target.name}`
+            if (pTier.toLowerCase().includes('winner')) {
+                subject = `🏆 Congratulations! Winner Certificate for ${activeEventName} - ${target.name}`
+            } else if (pTier.toLowerCase().includes('special mention')) {
+                subject = `⭐ Special Recognition Honors for ${activeEventName} - ${target.name}`
+            }
+            setCertMailStudioModal({
+                isOpen: true,
+                mode: 'single',
+                participant: target,
+                targets: [target],
+                subject,
+                bodyHtml: GOOGLE_CERTIFICATE_EMAIL_TEMPLATE,
+                editorTab: 'preview',
+                customEmail: target.email || ''
+            })
+        }
+    }
+
+    const studioPreviewHtml = useMemo(() => {
+        if (!certMailStudioModal) return ''
+        const sample = certMailStudioModal.participant || certMailStudioModal.targets[0] || participants[0]
+        if (!sample) return certMailStudioModal.bodyHtml
+        const sampleTier = getParticipantAwardTier(sample)
+        const sampleCertCode = sample.certificate_code || getExistingOrNewCertCode(sample, sampleTier)
+        return replacePlaceholders(
+            certMailStudioModal.bodyHtml,
+            {
+                name: sample.name,
+                email: certMailStudioModal.customEmail || sample.email || 'student@klu.ac.in',
+                reg_no: sample.reg_no || '9921004001',
+                team_name: sample.team_name || 'Individual Track',
+                award_tier: sampleTier,
+                category: sample.category || 'EE Credit',
+                certificate_code: sampleCertCode,
+                dept: sample.dept || 'Computer Science & Engineering',
+                year: sample.year || '3rd Year',
+                section: sample.section || 'A'
+            },
+            {
+                eventName: activeEventName,
+                eventDate: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+                organizerName: 'GDG-KARE Organizing Committee'
+            }
+        )
+    }, [certMailStudioModal, participants, activeEventName])
+
+    const handleSendSingleEmailFromStudio = async () => {
+        if (!certMailStudioModal || !certMailStudioModal.participant) return
+        const p = certMailStudioModal.participant
+        const targetEmail = (certMailStudioModal.customEmail !== undefined ? certMailStudioModal.customEmail : (p.email || '')).trim()
+        if (!targetEmail || !targetEmail.includes('@')) {
+            showToast('error', 'Please enter a valid recipient email address.')
+            return
+        }
+
+        setSendingEmailId(p.id)
+        try {
+            const pTier = getParticipantAwardTier(p)
+            const existing = generatedResults.find(g => g.participant.id === p.id)
+            const dataUrl = existing ? existing.canvasDataUrl : await renderSingleCertificateDataUrl(p, pTier, 'png')
+            const certCode = existing?.certCode || getExistingOrNewCertCode(p, pTier)
+            const cleanReg = (p.reg_no || 'CERTIFICATE').trim().replace(/[/\\?%*:|"<>]/g, '_')
+
+            const res = await fetch('/api/organizer/mail/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: `Certificate - ${p.name} (${cleanReg})`,
+                    type: 'certificate',
+                    subject: certMailStudioModal.subject,
+                    bodyHtml: certMailStudioModal.bodyHtml,
+                    forceDuplicate: true,
+                    eventConfig: {
+                        eventName: activeEventName,
+                        eventDate: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+                        organizerName: 'GDG-KARE Organizing Committee'
+                    },
+                    recipients: [
+                        {
+                            email: targetEmail,
+                            name: p.name,
+                            reg_no: p.reg_no,
+                            team_name: p.team_name,
+                            award_tier: pTier,
+                            category: p.category,
+                            certificate_code: certCode,
+                            dept: p.dept,
+                            year: p.year,
+                            section: p.section,
+                            attachments: [
+                                {
+                                    filename: `${cleanReg}.png`,
+                                    content: dataUrl,
+                                    contentType: 'image/png'
+                                }
+                            ]
+                        }
+                    ]
+                })
+            })
+
+            const result = await res.json()
+            if (!res.ok || !result.success || result.sentCount === 0) {
+                throw new Error(result.error || result.message || 'Failed to dispatch email')
+            }
+
+            if (targetEmail !== p.email) {
+                setParticipants(prev => prev.map(item => item.id === p.id ? { ...item, email: targetEmail } : item))
+            }
+
+            setCertMailStudioModal(null)
+            setCertMailAckModal({
+                isOpen: true,
+                mode: 'single',
+                participant: p,
+                targetEmail,
+                certCode,
+                attachmentFilename: `${cleanReg}.png`,
+                subject: certMailStudioModal.subject,
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })
+            })
+            showToast('success', `Certificate successfully emailed to ${targetEmail}!`)
+        } catch (err: any) {
+            console.error('Failed to send certificate email:', err)
+            showToast('error', `Failed to send email: ${err.message || 'Transmission error'}`)
+        } finally {
+            setSendingEmailId(null)
+        }
+    }
+
+    const handleSendSingleCertificateEmail = async (p: ParticipantRecord, overrideEmail?: string) => {
+        openCertMailStudio(p)
+    }
+
+    const handleInitiateBulkCertificateEmail = (targets: ParticipantRecord[]) => {
+        openCertMailStudio(targets)
+    }
+
+    const handleStartBulkEmailFromStudio = () => {
+        if (!certMailStudioModal || certMailStudioModal.targets.length === 0) return
+        const targets = certMailStudioModal.targets
+        const customSubject = certMailStudioModal.subject
+        const customBodyHtml = certMailStudioModal.bodyHtml
+        setCertMailStudioModal(null)
+        handleExecuteBulkCertificateEmail(targets, customSubject, customBodyHtml)
+    }
+
+    const handleExecuteBulkCertificateEmail = async (targets: ParticipantRecord[], customSubject?: string, customBodyHtml?: string) => {
+        const validTargets = targets.filter(p => p.email && p.email.trim())
+        if (validTargets.length === 0) {
+            showToast('error', 'None of the selected candidates have a valid email address.')
+            return
+        }
+
+        setBulkEmailConfirmModal(null)
+        setIsBulkSendingMail(true)
+        setBulkMailProgress({
+            isOpen: true,
+            total: validTargets.length,
+            current: 0,
+            sent: 0,
+            failed: 0,
+            currentName: validTargets[0].name,
+            isComplete: false,
+            errors: []
+        })
+
+        let sent = 0
+        let failed = 0
+        const errors: string[] = []
+
+        for (let i = 0; i < validTargets.length; i++) {
+            const p = validTargets[i]
+            setBulkMailProgress(prev => ({
+                ...prev,
+                current: i + 1,
+                currentName: `${p.name} (${p.reg_no || ''})`
+            }))
+
+            await new Promise(r => setTimeout(r, 60))
+
+            try {
+                const pTier = getParticipantAwardTier(p)
+                const existing = generatedResults.find(g => g.participant.id === p.id)
+                const dataUrl = existing ? existing.canvasDataUrl : await renderSingleCertificateDataUrl(p, pTier, 'png')
+                const certCode = existing?.certCode || getExistingOrNewCertCode(p, pTier)
+                const cleanReg = (p.reg_no || 'CERTIFICATE').trim().replace(/[/\\?%*:|"<>]/g, '_')
+
+                const templateHtml = customBodyHtml || GOOGLE_CERTIFICATE_EMAIL_TEMPLATE
+                let emailSubject = customSubject || `🎓 Official Certificate of Participation for ${activeEventName}`
+                if (!customSubject) {
+                    if (pTier.toLowerCase().includes('winner')) {
+                        emailSubject = `🏆 Congratulations! Your Winner Certificate for ${activeEventName}`
+                    } else if (pTier.toLowerCase().includes('special mention')) {
+                        emailSubject = `⭐ Special Recognition Award Certificate for ${activeEventName}`
+                    }
+                }
+
+                const res = await fetch('/api/organizer/mail/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: `Bulk Certificate - ${p.name} (${cleanReg})`,
+                        type: 'certificate',
+                        subject: emailSubject,
+                        bodyHtml: templateHtml,
+                        forceDuplicate: true,
+                        eventConfig: {
+                            eventName: activeEventName,
+                            eventDate: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+                            organizerName: 'GDG-KARE Organizing Committee'
+                        },
+                        recipients: [
+                            {
+                                email: p.email!.trim(),
+                                name: p.name,
+                                reg_no: p.reg_no,
+                                team_name: p.team_name,
+                                award_tier: pTier,
+                                category: p.category,
+                                certificate_code: certCode,
+                                dept: p.dept,
+                                year: p.year,
+                                section: p.section,
+                                attachments: [
+                                    {
+                                        filename: `${cleanReg}.png`,
+                                        content: dataUrl,
+                                        contentType: 'image/png'
+                                    }
+                                ]
+                            }
+                        ]
+                    })
+                })
+
+                const resData = await res.json()
+                if (res.ok && resData.success && resData.sentCount > 0) {
+                    sent++
+                } else {
+                    failed++
+                    errors.push(`${p.name}: ${resData.error || resData.message || 'Send error'}`)
+                }
+            } catch (err: any) {
+                failed++
+                errors.push(`${p.name}: ${err.message || 'Failed'}`)
+            }
+
+            setBulkMailProgress(prev => ({
+                ...prev,
+                sent,
+                failed,
+                errors
+            }))
+        }
+
+        setBulkMailProgress(prev => ({
+            ...prev,
+            isOpen: false,
+            isComplete: true
+        }))
+        setIsBulkSendingMail(false)
+
+        if (sent > 0) {
+            setCertMailAckModal({
+                isOpen: true,
+                mode: 'bulk',
+                totalSent: sent,
+                totalFailed: failed,
+                errors,
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'short', day: 'numeric', year: 'numeric' }),
+                recipients: validTargets.map(t => ({
+                    name: t.name,
+                    email: t.email!,
+                    reg_no: t.reg_no,
+                    certCode: t.certificate_code || getExistingOrNewCertCode(t, getParticipantAwardTier(t))
+                }))
+            })
+            showToast('success', `Sent ${sent} certificate email(s) successfully!${failed > 0 ? ` (${failed} failed)` : ''}`)
+        } else {
+            showToast('error', `Failed to send certificate emails. ${errors[0] || ''}`)
         }
     }
 
@@ -5462,6 +5859,17 @@ export default function OrganizerCertificatesPage() {
                         {/* Selected Category Primary Action Box */}
                         {(() => {
                             const activeCat = downloadCategories.find(c => c.id === selectedDownloadCategoryId) || downloadCategories[0]
+                            const allParticipants = participants
+                            const categoryParticipants = activeCat.id === 'all'
+                                ? allParticipants
+                                : activeCat.id === 'participation'
+                                    ? allParticipants.filter(p => getParticipantAwardTier(p) === 'Participation')
+                                    : allParticipants.filter(p => {
+                                        const rank = parseInt(activeCat.id.replace('winner_', ''), 10)
+                                        const team = (winningTeams[rank - 1] || '').trim().toLowerCase()
+                                        return p.team_name && p.team_name.trim().toLowerCase() === team
+                                    })
+
                             return (
                                 <div className="bg-black p-6 rounded-2xl border border-gray-800 shadow-xl text-white space-y-5">
                                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
@@ -5519,6 +5927,19 @@ export default function OrganizerCertificatesPage() {
                                                         : `Download ${activeCat.shortName} PNGs (${activeCat.count})`}
                                                 </span>
                                             </button>
+
+                                            {/* BULK SEND EMAIL BUTTON */}
+                                            <button
+                                                type="button"
+                                                id="bulk-send-category-cert-btn"
+                                                onClick={() => handleInitiateBulkCertificateEmail(categoryParticipants.filter(p => p.selected))}
+                                                disabled={isBulkSendingMail || categoryParticipants.filter(p => p.selected).length === 0}
+                                                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                                                title={`Send certificate emails to selected students in ${activeCat.label}`}
+                                            >
+                                                <Mail size={15} />
+                                                <span>Send Bulk Mail ({categoryParticipants.filter(p => p.selected).length})</span>
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -5541,16 +5962,53 @@ export default function OrganizerCertificatesPage() {
 
                             return (
                                 <div className="border border-gray-200 rounded-xl overflow-hidden">
-                                    <div className="bg-slate-100 p-3 text-xs font-bold text-gray-700 border-b border-gray-200 flex items-center justify-between">
-                                        <span>Students in &quot;{activeCat.label}&quot; ({categoryParticipants.length})</span>
-                                        <span className="text-[11px] text-gray-500 font-normal">
-                                            Click Preview or Download for individual certificates
-                                        </span>
+                                    <div className="bg-slate-100 p-3 text-xs font-bold text-gray-700 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2.5">
+                                            <span>Students in &quot;{activeCat.label}&quot; ({categoryParticipants.length})</span>
+                                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                                {categoryParticipants.filter(p => p.selected).length} selected
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const allSelected = categoryParticipants.every(p => p.selected)
+                                                    const catIds = new Set(categoryParticipants.map(p => p.id))
+                                                    setParticipants(prev => prev.map(p => catIds.has(p.id) ? { ...p, selected: !allSelected } : p))
+                                                }}
+                                                className="text-[11px] font-semibold text-gray-700 hover:text-black bg-white border border-gray-300 rounded px-2.5 py-1 transition cursor-pointer"
+                                            >
+                                                {categoryParticipants.every(p => p.selected) ? 'Deselect All' : 'Select All'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleInitiateBulkCertificateEmail(categoryParticipants.filter(p => p.selected))}
+                                                disabled={isBulkSendingMail || categoryParticipants.filter(p => p.selected).length === 0}
+                                                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded font-bold text-[11px] flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                                            >
+                                                <Mail size={12} />
+                                                <span>Send Bulk Mail ({categoryParticipants.filter(p => p.selected).length})</span>
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="max-h-72 overflow-y-auto">
                                         <table className="w-full text-left text-xs">
                                             <thead className="bg-slate-50 sticky top-0 border-b border-gray-200 text-gray-600 font-bold uppercase text-[10px]">
                                                 <tr>
+                                                    <th className="py-2.5 px-3 w-10 text-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={categoryParticipants.length > 0 && categoryParticipants.every(p => p.selected)}
+                                                            onChange={(e) => {
+                                                                const check = e.target.checked
+                                                                const catIds = new Set(categoryParticipants.map(p => p.id))
+                                                                setParticipants(prev => prev.map(p => catIds.has(p.id) ? { ...p, selected: check } : p))
+                                                            }}
+                                                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                            title="Select / Deselect all in this category"
+                                                        />
+                                                    </th>
                                                     <th className="py-2.5 px-3">Participant</th>
                                                     <th className="py-2.5 px-3">Reg No</th>
                                                     <th className="py-2.5 px-3">Team</th>
@@ -5562,7 +6020,7 @@ export default function OrganizerCertificatesPage() {
                                             <tbody className="divide-y divide-gray-100">
                                                 {categoryParticipants.length === 0 ? (
                                                     <tr>
-                                                        <td colSpan={6} className="py-8 text-center text-gray-400 text-xs">
+                                                        <td colSpan={7} className="py-8 text-center text-gray-400 text-xs">
                                                             No participants assigned to this category yet.
                                                         </td>
                                                     </tr>
@@ -5572,7 +6030,24 @@ export default function OrganizerCertificatesPage() {
                                                         const existing = generatedResults.find(g => g.participant.id === p.id)
                                                         return (
                                                             <tr key={p.id || idx} className="hover:bg-slate-50">
-                                                                <td className="py-2 px-3 font-semibold text-gray-900">{p.name}</td>
+                                                                <td className="py-2 px-3 text-center">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={p.selected ?? true}
+                                                                        onChange={(e) => {
+                                                                            const check = e.target.checked
+                                                                            setParticipants(prev => prev.map(item => item.id === p.id ? { ...item, selected: check } : item))
+                                                                        }}
+                                                                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                                    />
+                                                                </td>
+                                                                <td className="py-2 px-3">
+                                                                    <div className="font-semibold text-gray-900">{p.name}</div>
+                                                                    <div className="text-[10px] text-gray-500 flex items-center gap-1 font-mono">
+                                                                        <Mail size={10} className="text-gray-400 shrink-0" />
+                                                                        <span>{p.email || 'No email registered'}</span>
+                                                                    </div>
+                                                                </td>
                                                                 <td className="py-2 px-3 font-mono font-bold text-gray-700">{p.reg_no}</td>
                                                                 <td className="py-2 px-3 text-gray-600">{p.team_name || '—'}</td>
                                                                 <td className="py-2 px-3">
@@ -5616,6 +6091,25 @@ export default function OrganizerCertificatesPage() {
                                                                         >
                                                                             <Download size={11} />
                                                                             <span>PNG</span>
+                                                                        </button>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleSendSingleCertificateEmail(p)}
+                                                                            disabled={sendingEmailId === p.id}
+                                                                            className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                                                                            title={p.email ? `Send certificate to ${p.email}` : "Send certificate email"}
+                                                                        >
+                                                                            {sendingEmailId === p.id ? (
+                                                                                <>
+                                                                                    <RefreshCw size={11} className="animate-spin text-blue-600" />
+                                                                                    <span>Sending...</span>
+                                                                                </>
+                                                                            ) : (
+                                                                                <>
+                                                                                    <Mail size={11} />
+                                                                                    <span>Send Mail</span>
+                                                                                </>
+                                                                            )}
                                                                         </button>
                                                                     </div>
                                                                 </td>
@@ -6951,6 +7445,649 @@ export default function OrganizerCertificatesPage() {
                                 Main-thread yielding is active on each certificate. Your browser stays completely responsive without freezing or lagging.
                             </p>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Manual Email Input Modal */}
+            {manualEmailModal && manualEmailModal.isOpen && manualEmailModal.participant && (
+                <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-200 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                                    <Mail size={18} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-sm text-gray-900">Send Certificate Email</h3>
+                                    <p className="text-[11px] text-gray-500">{manualEmailModal.participant.name} ({manualEmailModal.participant.reg_no})</p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setManualEmailModal(null)}
+                                className="text-gray-400 hover:text-gray-600 p-1"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-3">
+                            <p className="text-xs text-gray-600 leading-relaxed">
+                                No email address was detected for this student in the dataset. Please enter their email address to dispatch their official certificate:
+                            </p>
+                            <div>
+                                <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                                    Recipient Email Address
+                                </label>
+                                <input
+                                    type="email"
+                                    value={manualEmailModal.emailInput}
+                                    onChange={(e) => setManualEmailModal({ ...manualEmailModal, emailInput: e.target.value })}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && manualEmailModal.emailInput.trim()) {
+                                            handleSendSingleCertificateEmail(manualEmailModal.participant!, manualEmailModal.emailInput.trim())
+                                        }
+                                    }}
+                                    placeholder="e.g. student@klu.ac.in"
+                                    autoFocus
+                                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs font-semibold text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2">
+                            <button
+                                type="button"
+                                onClick={() => setManualEmailModal(null)}
+                                className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100 transition"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!manualEmailModal.emailInput.trim() || sendingEmailId === manualEmailModal.participant.id}
+                                onClick={() => handleSendSingleCertificateEmail(manualEmailModal.participant!, manualEmailModal.emailInput.trim())}
+                                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                            >
+                                {sendingEmailId === manualEmailModal.participant.id ? (
+                                    <>
+                                        <RefreshCw size={12} className="animate-spin" />
+                                        <span>Sending...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Send size={12} />
+                                        <span>Send Certificate</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Certificate Email Studio Modal (Google Colours with Dynamic Placeholders, HTML Code & Live Preview) */}
+            {certMailStudioModal && certMailStudioModal.isOpen && (
+                <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+                    <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl border border-gray-200 overflow-hidden my-auto animate-in fade-in zoom-in-95 flex flex-col max-h-[92vh]">
+                        {/* Google 4-Color Stripe Bar */}
+                        <div className="h-1.5 w-full bg-gradient-to-r from-[#4285F4] via-[#EA4335] via-[#FBBC05] to-[#34A853]" />
+
+                        {/* Modal Header */}
+                        <div className="p-4 sm:p-5 border-b border-gray-200 flex items-center justify-between bg-white shrink-0">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-blue-50 text-[#4285F4] flex items-center justify-center border border-blue-100 shadow-2xs">
+                                    <Mail size={20} />
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="font-bold text-base text-gray-900">Certificate Email Studio</h3>
+                                        <div className="flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full bg-[#4285F4]" />
+                                            <span className="w-2 h-2 rounded-full bg-[#EA4335]" />
+                                            <span className="w-2 h-2 rounded-full bg-[#FBBC05]" />
+                                            <span className="w-2 h-2 rounded-full bg-[#34A853]" />
+                                        </div>
+                                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                            {certMailStudioModal.mode === 'single' ? 'Single Delivery' : `Bulk Delivery (${certMailStudioModal.targets.length} Recipients)`}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-0.5">
+                                        {certMailStudioModal.mode === 'single'
+                                            ? `Delivering official certificate attached to ${certMailStudioModal.participant?.name || 'Participant'}`
+                                            : `Batch dispatching official certificates attached to ${certMailStudioModal.targets.length} candidates`}
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setCertMailStudioModal(null)}
+                                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        {/* Modal Body (Scrollable) */}
+                        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
+                            {/* Dynamic Placeholders Bar (Google Colors styled) */}
+                            <div className="bg-slate-50 border border-gray-200 rounded-xl p-3.5 space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
+                                        <span className="w-2 h-2 rounded-full bg-[#4285F4]" />
+                                        Dynamic Placeholders (Certificate Studio)
+                                    </span>
+                                    <span className="text-[11px] text-gray-500 font-medium">Auto-populated per recipient from certificate dataset</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {CERTIFICATE_STUDIO_PLACEHOLDERS.map(tag => (
+                                        <span
+                                            key={tag}
+                                            className="inline-flex items-center px-2 py-1 rounded-md text-[11px] font-mono font-bold bg-white text-blue-800 border border-blue-200 shadow-2xs"
+                                        >
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Subject Line & Recipient Input */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                                <div>
+                                    <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                                        Subject Line
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={certMailStudioModal.subject}
+                                        onChange={(e) => setCertMailStudioModal({ ...certMailStudioModal, subject: e.target.value })}
+                                        className="w-full px-3 py-2 bg-white border border-gray-300 rounded-xl text-xs font-semibold text-gray-900 focus:outline-none focus:border-[#4285F4] focus:ring-1 focus:ring-[#4285F4]"
+                                        placeholder="e.g. 🎓 Official Certificate for {{event_name}} - {{participant_name}}"
+                                    />
+                                </div>
+
+                                {certMailStudioModal.mode === 'single' ? (
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                            <span>Recipient Email</span>
+                                            {(!certMailStudioModal.customEmail && !certMailStudioModal.participant?.email) && (
+                                                <span className="text-amber-600 font-semibold normal-case text-[10px]">⚠️ Email required</span>
+                                            )}
+                                        </label>
+                                        <input
+                                            type="email"
+                                            value={certMailStudioModal.customEmail !== undefined ? certMailStudioModal.customEmail : (certMailStudioModal.participant?.email || '')}
+                                            onChange={(e) => setCertMailStudioModal({ ...certMailStudioModal, customEmail: e.target.value })}
+                                            placeholder="student@klu.ac.in"
+                                            className="w-full px-3 py-2 bg-white border border-gray-300 rounded-xl text-xs font-semibold text-gray-900 focus:outline-none focus:border-[#4285F4] focus:ring-1 focus:ring-[#4285F4]"
+                                        />
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                                            Recipients Overview
+                                        </label>
+                                        <div className="flex items-center gap-2 h-[34px] px-3 bg-gray-50 border border-gray-200 rounded-xl text-xs">
+                                            <span className="text-emerald-700 font-bold">
+                                                ✓ {certMailStudioModal.targets.filter(p => p.email && p.email.trim()).length} Ready
+                                            </span>
+                                            {certMailStudioModal.targets.some(p => !p.email || !p.email.trim()) && (
+                                                <span className="text-amber-700 font-bold ml-auto">
+                                                    ⚠️ {certMailStudioModal.targets.filter(p => !p.email || !p.email.trim()).length} Missing Email (Skipped)
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Tabs: Interactive Preview vs HTML Code Editor */}
+                            <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
+                                <div className="flex items-center justify-between px-3.5 py-2 bg-slate-50 border-b border-gray-200">
+                                    <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-gray-300">
+                                        <button
+                                            type="button"
+                                            onClick={() => setCertMailStudioModal({ ...certMailStudioModal, editorTab: 'preview' })}
+                                            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                                                certMailStudioModal.editorTab === 'preview'
+                                                    ? 'bg-[#4285F4] text-white shadow-2xs'
+                                                    : 'text-gray-600 hover:text-black'
+                                            }`}
+                                        >
+                                            <Eye size={13} />
+                                            Live Preview
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setCertMailStudioModal({ ...certMailStudioModal, editorTab: 'code' })}
+                                            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                                                certMailStudioModal.editorTab === 'code'
+                                                    ? 'bg-[#4285F4] text-white shadow-2xs'
+                                                    : 'text-gray-600 hover:text-black'
+                                            }`}
+                                        >
+                                            <Code size={13} />
+                                            HTML Code
+                                        </button>
+                                    </div>
+
+                                    <div className="text-[11px] text-gray-500 font-medium flex items-center gap-1.5">
+                                        <span>Previewing for:</span>
+                                        <strong className="text-gray-900 font-bold">
+                                            {certMailStudioModal.participant?.name || certMailStudioModal.targets[0]?.name || 'Participant'}
+                                        </strong>
+                                        <span className="text-gray-400 font-mono">
+                                            ({certMailStudioModal.participant?.reg_no || certMailStudioModal.targets[0]?.reg_no || 'REG'})
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {certMailStudioModal.editorTab === 'preview' ? (
+                                    <div className="p-3 bg-gray-100 flex justify-center min-h-[380px]">
+                                        <div className="w-full max-w-[620px] bg-white rounded-xl shadow-xs overflow-hidden border border-gray-200">
+                                            <iframe
+                                                title="Certificate Email Preview"
+                                                srcDoc={studioPreviewHtml}
+                                                className="w-full h-[440px] border-0"
+                                                sandbox="allow-same-origin allow-scripts"
+                                            />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <textarea
+                                        value={certMailStudioModal.bodyHtml}
+                                        onChange={(e) => setCertMailStudioModal({ ...certMailStudioModal, bodyHtml: e.target.value })}
+                                        rows={16}
+                                        className="w-full p-4 bg-gray-900 text-gray-100 font-mono text-xs focus:outline-none resize-none border-0"
+                                        placeholder="<!DOCTYPE html>..."
+                                        spellCheck={false}
+                                    />
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Modal Footer */}
+                        <div className="p-4 sm:p-5 border-t border-gray-200 bg-white flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                            <div className="text-xs text-gray-600 flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-[#34A853]" />
+                                <span>
+                                    📎 <strong>Certificate Attached:</strong> High-resolution PNG is auto-rendered from studio canvas and attached as <code>&lt;reg_no&gt;.png</code>.
+                                </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => setCertMailStudioModal(null)}
+                                    className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100 transition cursor-pointer"
+                                >
+                                    Cancel
+                                </button>
+
+                                {certMailStudioModal.mode === 'single' ? (
+                                    <button
+                                        type="button"
+                                        onClick={handleSendSingleEmailFromStudio}
+                                        disabled={sendingEmailId === certMailStudioModal.participant?.id}
+                                        className="px-5 py-2.5 bg-[#4285F4] hover:bg-blue-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition shadow-sm cursor-pointer"
+                                    >
+                                        {sendingEmailId === certMailStudioModal.participant?.id ? (
+                                            <>
+                                                <RefreshCw size={13} className="animate-spin text-white" />
+                                                <span>Dispatching Certificate...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Send size={13} />
+                                                <span>Send Certificate Email</span>
+                                            </>
+                                        )}
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={handleStartBulkEmailFromStudio}
+                                        disabled={isBulkSendingMail || certMailStudioModal.targets.filter(p => p.email && p.email.trim()).length === 0}
+                                        className="px-5 py-2.5 bg-[#4285F4] hover:bg-blue-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition shadow-sm cursor-pointer"
+                                    >
+                                        <Send size={13} />
+                                        <span>
+                                            Dispatch {certMailStudioModal.targets.filter(p => p.email && p.email.trim()).length} Certificate Emails
+                                        </span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Certificate Email Dispatch Acknowledgement Popup Modal (Google Colours) */}
+            {certMailAckModal && certMailAckModal.isOpen && (
+                <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+                    <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl border border-gray-200 overflow-hidden my-auto animate-in fade-in zoom-in-95 flex flex-col">
+                        {/* Google 4-Color Stripe Bar */}
+                        <div className="h-1.5 w-full bg-gradient-to-r from-[#4285F4] via-[#EA4335] via-[#FBBC05] to-[#34A853]" />
+
+                        {/* Modal Header & Close Button */}
+                        <div className="p-5 sm:p-6 pb-2 text-center relative">
+                            <button
+                                type="button"
+                                onClick={() => setCertMailAckModal(null)}
+                                className="absolute right-4 top-4 text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+                                title="Close Acknowledgement"
+                            >
+                                <X size={18} />
+                            </button>
+
+                            {/* Success Badge Icon */}
+                            <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto mb-3 shadow-xs">
+                                <CheckCircle2 size={32} />
+                            </div>
+
+                            <div className="flex items-center justify-center gap-1.5 mb-1">
+                                <span className="w-2 h-2 rounded-full bg-[#4285F4]" />
+                                <span className="w-2 h-2 rounded-full bg-[#EA4335]" />
+                                <span className="w-2 h-2 rounded-full bg-[#FBBC05]" />
+                                <span className="w-2 h-2 rounded-full bg-[#34A853]" />
+                                <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider ml-1">
+                                    Transmission Confirmed
+                                </span>
+                            </div>
+
+                            <h3 className="text-lg font-bold text-gray-900">
+                                {certMailAckModal.mode === 'single'
+                                    ? 'Certificate Dispatched Successfully'
+                                    : 'Batch Certificate Dispatch Completed'}
+                            </h3>
+                            <p className="text-xs text-gray-600 mt-1 max-w-sm mx-auto">
+                                {certMailAckModal.mode === 'single'
+                                    ? 'The official certificate has been sent with high-resolution PNG graphic attached.'
+                                    : `Successfully dispatched certificate emails to ${certMailAckModal.totalSent} participants with PNG attachments.`}
+                            </p>
+                        </div>
+
+                        {/* Modal Body */}
+                        <div className="p-5 sm:p-6 pt-2 space-y-3.5">
+                            {certMailAckModal.mode === 'single' ? (
+                                <div className="bg-slate-50 border border-gray-200 rounded-xl p-3.5 space-y-2.5 text-xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-medium text-gray-500">Recipient:</span>
+                                        <span className="font-bold text-gray-900">{certMailAckModal.participant?.name}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-medium text-gray-500">Email Address:</span>
+                                        <span className="font-mono text-[#1a73e8] bg-blue-50 px-2 py-0.5 rounded border border-blue-200 font-bold text-[11px]">
+                                            {certMailAckModal.targetEmail}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-medium text-gray-500">Registration No:</span>
+                                        <span className="font-mono font-semibold text-gray-800">{certMailAckModal.participant?.reg_no || '—'}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-medium text-gray-500">Award Tier:</span>
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                            {certMailAckModal.participant ? getParticipantAwardTier(certMailAckModal.participant) : 'Participation'}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between pt-1.5 border-t border-gray-200">
+                                        <span className="font-medium text-gray-500">Certificate ID:</span>
+                                        <div className="flex items-center gap-1.5">
+                                            <code className="font-mono font-bold text-gray-900 text-[11px] bg-white px-2 py-0.5 rounded border border-gray-200">
+                                                {certMailAckModal.certCode}
+                                            </code>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (certMailAckModal.certCode) {
+                                                        navigator.clipboard.writeText(certMailAckModal.certCode)
+                                                        setCopiedAckCertCode(true)
+                                                        setTimeout(() => setCopiedAckCertCode(false), 2000)
+                                                    }
+                                                }}
+                                                className="p-1 text-gray-500 hover:text-blue-600 hover:bg-white rounded transition cursor-pointer"
+                                                title="Copy Certificate ID"
+                                            >
+                                                {copiedAckCertCode ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-medium text-gray-500">Attached File:</span>
+                                        <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px] flex items-center gap-1">
+                                            📎 {certMailAckModal.attachmentFilename}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-[11px] text-gray-500 pt-1 border-t border-gray-200">
+                                        <span>Transmitted At:</span>
+                                        <span className="font-semibold text-gray-700">{certMailAckModal.timestamp}</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-2 gap-3 text-center">
+                                        <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
+                                            <div className="text-2xl font-black text-emerald-700">{certMailAckModal.totalSent}</div>
+                                            <div className="text-[11px] font-bold text-emerald-900 mt-0.5">Delivered Successfully</div>
+                                        </div>
+                                        <div className={`rounded-xl p-3 border ${certMailAckModal.totalFailed && certMailAckModal.totalFailed > 0 ? 'bg-amber-50/70 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                                            <div className={`text-2xl font-black ${certMailAckModal.totalFailed && certMailAckModal.totalFailed > 0 ? 'text-amber-700' : 'text-gray-400'}`}>
+                                                {certMailAckModal.totalFailed || 0}
+                                            </div>
+                                            <div className="text-[11px] font-semibold text-gray-600 mt-0.5">Delivery Failures</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Attachment note */}
+                                    <div className="text-xs text-gray-600 bg-blue-50/60 border border-blue-200 rounded-xl p-3 flex items-center gap-2">
+                                        <span className="w-2 h-2 rounded-full bg-[#4285F4] shrink-0" />
+                                        <span>
+                                            📎 <strong>PNGs Attached:</strong> Each candidate received their unique print-ready certificate as <code>&lt;reg_no&gt;.png</code>.
+                                        </span>
+                                    </div>
+
+                                    {/* Recipients List Preview */}
+                                    {certMailAckModal.recipients && certMailAckModal.recipients.length > 0 && (
+                                        <div className="border border-gray-200 rounded-xl overflow-hidden">
+                                            <div className="bg-slate-50 px-3 py-1.5 text-[11px] font-bold text-gray-600 border-b border-gray-200 flex justify-between">
+                                                <span>Recipients Transmitted</span>
+                                                <span>{certMailAckModal.recipients.length} total</span>
+                                            </div>
+                                            <div className="max-h-36 overflow-y-auto divide-y divide-gray-100 bg-white">
+                                                {certMailAckModal.recipients.map((r, i) => (
+                                                    <div key={i} className="px-3 py-1.5 flex items-center justify-between text-xs hover:bg-slate-50">
+                                                        <div className="flex items-center gap-1.5 truncate">
+                                                            <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                                                            <span className="font-semibold text-gray-900 truncate">{r.name}</span>
+                                                            <span className="font-mono text-gray-400 text-[10px]">({r.reg_no})</span>
+                                                        </div>
+                                                        <span className="font-mono text-[#1a73e8] text-[10px] truncate max-w-[150px]">{r.email}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Verification Ledger Notice */}
+                            <div className="bg-slate-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-600 flex items-start gap-2">
+                                <span className="w-2 h-2 rounded-full bg-[#34A853] shrink-0 mt-1" />
+                                <div className="text-[11px] leading-relaxed">
+                                    <strong>Credential Ledger:</strong> Certificate cryptographic codes have been committed to the verification ledger. Recipients can view their attached high-resolution PNG certificate directly.
+                                </div>
+                            </div>
+
+                            {/* Modal Action Buttons */}
+                            <div className="pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setCertMailAckModal(null)}
+                                    className="w-full py-2.5 bg-[#4285F4] hover:bg-blue-600 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                                >
+                                    <Check size={14} />
+                                    <span>Done &amp; Return to Studio</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Bulk Certificate Email Confirmation Modal */}
+            {bulkEmailConfirmModal && bulkEmailConfirmModal.isOpen && (
+                <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl border border-gray-200 space-y-5 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shadow-xs">
+                                    <Mail size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-base text-gray-900">Send Bulk Certificate Emails</h3>
+                                    <p className="text-xs text-gray-500">{bulkEmailConfirmModal.categoryLabel}</p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setBulkEmailConfirmModal(null)}
+                                className="text-gray-400 hover:text-gray-600 p-1"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {(() => {
+                            const withEmail = bulkEmailConfirmModal.targets.filter(p => p.email && p.email.trim())
+                            const missingEmail = bulkEmailConfirmModal.targets.filter(p => !p.email || !p.email.trim())
+
+                            return (
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-3 text-center">
+                                        <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3">
+                                            <div className="text-xl font-black text-blue-700">{withEmail.length}</div>
+                                            <div className="text-[11px] font-semibold text-blue-900 mt-0.5">Ready to Dispatch</div>
+                                        </div>
+                                        <div className={`rounded-xl p-3 border ${missingEmail.length > 0 ? 'bg-amber-50/70 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                                            <div className={`text-xl font-black ${missingEmail.length > 0 ? 'text-amber-700' : 'text-gray-400'}`}>{missingEmail.length}</div>
+                                            <div className="text-[11px] font-semibold text-gray-600 mt-0.5">Missing Email (Skipped)</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 space-y-2 text-xs text-gray-700">
+                                        <div className="flex justify-between">
+                                            <span className="font-medium text-gray-500">Event:</span>
+                                            <span className="font-bold text-gray-900 truncate max-w-[260px]">{activeEventName}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="font-medium text-gray-500">Attachment:</span>
+                                            <span className="font-bold text-blue-700">High-Resolution PNG (&lt;reg_no&gt;.png)</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="font-medium text-gray-500">Certificate ID:</span>
+                                            <span className="font-bold text-emerald-700">Included (Unique Credential Code)</span>
+                                        </div>
+                                    </div>
+
+                                    {missingEmail.length > 0 && (
+                                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 flex items-start gap-2">
+                                            <AlertCircle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                                            <div>
+                                                <span className="font-bold">{missingEmail.length} participant(s) do not have an email address:</span>
+                                                <div className="text-[11px] text-amber-700 mt-1 max-h-20 overflow-y-auto font-mono">
+                                                    {missingEmail.map(p => `${p.name} (${p.reg_no})`).join(', ')}
+                                                </div>
+                                                <p className="text-[10px] text-amber-600 mt-1">These participants will be skipped during bulk sending. You can send to them individually to enter an email.</p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="flex items-center justify-end gap-2 pt-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setBulkEmailConfirmModal(null)}
+                                            className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100 transition"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={withEmail.length === 0}
+                                            onClick={() => handleExecuteBulkCertificateEmail(bulkEmailConfirmModal.targets)}
+                                            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition shadow-xs cursor-pointer"
+                                        >
+                                            <Send size={13} />
+                                            <span>Start Dispatching ({withEmail.length} Certificates)</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )
+                        })()}
+                    </div>
+                </div>
+            )}
+
+            {/* Real-time Bulk Mail Dispatch Progress Modal */}
+            {bulkMailProgress && bulkMailProgress.isOpen && (
+                <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+                    <div className="bg-black border border-gray-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl text-white space-y-6 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center gap-4">
+                            <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-sm shrink-0">
+                                <Mail size={28} className={bulkMailProgress.isComplete ? '' : 'animate-bounce'} />
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                                        bulkMailProgress.isComplete ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30' : 'bg-blue-600/20 text-blue-300 border border-blue-500/30'
+                                    }`}>
+                                        {bulkMailProgress.isComplete ? 'Dispatch Complete' : 'Sending Certificates'}
+                                    </span>
+                                    <span className="text-xs text-gray-400">
+                                        {bulkMailProgress.current} / {bulkMailProgress.total} Dispatched
+                                    </span>
+                                </div>
+                                <h3 className="text-lg font-bold text-white leading-tight">
+                                    {bulkMailProgress.isComplete ? 'All Certificate Emails Processed' : 'Sending Certificate Emails'}
+                                </h3>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2.5 bg-gray-950 border border-gray-800 rounded-2xl p-4">
+                            <div className="flex items-center justify-between text-xs font-semibold">
+                                <span className="text-gray-300 truncate max-w-[280px]">
+                                    {bulkMailProgress.isComplete ? 'Completed all selected candidates' : `Sending to: ${bulkMailProgress.currentName}`}
+                                </span>
+                                <span className="text-blue-400 font-black text-sm">
+                                    {bulkMailProgress.total > 0 ? Math.round((bulkMailProgress.current / bulkMailProgress.total) * 100) : 0}%
+                                </span>
+                            </div>
+                            <div className="w-full h-3 bg-gray-900 rounded-full overflow-hidden p-0.5 border border-gray-800">
+                                <div
+                                    className={`h-full rounded-full transition-all duration-300 ease-out ${bulkMailProgress.isComplete ? 'bg-emerald-500' : 'bg-blue-600'}`}
+                                    style={{ width: `${Math.max(4, bulkMailProgress.total > 0 ? Math.round((bulkMailProgress.current / bulkMailProgress.total) * 100) : 0)}%` }}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between text-[11px] text-gray-400 pt-1">
+                                <span className="text-emerald-400 font-bold">{bulkMailProgress.sent} sent successfully</span>
+                                {bulkMailProgress.failed > 0 && (
+                                    <span className="text-rose-400 font-bold">{bulkMailProgress.failed} failed</span>
+                                )}
+                            </div>
+                        </div>
+
+                        {bulkMailProgress.isComplete && (
+                            <div className="pt-2 flex justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => setBulkMailProgress(prev => ({ ...prev, isOpen: false }))}
+                                    className="px-6 py-2.5 rounded-xl font-bold text-xs bg-blue-600 hover:bg-blue-700 text-white transition cursor-pointer"
+                                >
+                                    Done
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

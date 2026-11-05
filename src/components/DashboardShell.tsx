@@ -14,6 +14,7 @@ import {
     HeartHandshake,
     Trophy,
     Award,
+    Mail,
     Settings,
     CheckSquare,
     Target,
@@ -49,6 +50,7 @@ const ROLE_NAV_ITEMS: Record<DashboardRole, (userRole?: string) => NavItemConfig
         { label: 'Volunteer Attendance', href: '/dashboard/volunteer', icon: HeartHandshake },
         { label: 'Leaderboard Control', href: '/dashboard/organizer/leaderboard', icon: Trophy },
         { label: 'Certificate Studio', href: '/dashboard/organizer/certificates', icon: Award },
+        { label: 'Mail Management', href: '/dashboard/organizer/mail', icon: Mail },
         { label: 'Access Settings', href: '/dashboard/organizer/settings', icon: Settings, dividerAbove: true },
     ],
     judge: () => [
