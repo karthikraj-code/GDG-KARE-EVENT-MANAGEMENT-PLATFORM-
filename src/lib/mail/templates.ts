@@ -138,7 +138,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Google Sans', 'Segoe UI'
         <div class="attachment-alert">
             <div class="attachment-title">📎 Official High-Resolution Certificate Attached</div>
             <div class="attachment-desc">
-                Your print-ready certificate is attached directly to this email as <strong>{{reg_no}}.png</strong>. You can save the attached file to your device.
+                Your print-ready certificate is attached directly to this email as <strong>{{attachment_filename}}</strong>. You can save the attached file to your device.
             </div>
         </div>
 
@@ -471,7 +471,13 @@ export function replacePlaceholders(
         '{{credit}}': recipient.category !== undefined && recipient.category !== null ? String(recipient.category) : '',
         '{{dept}}': (recipient as any).dept || recipient.metadata?.dept || '',
         '{{year}}': (recipient as any).year || recipient.metadata?.year || '',
-        '{{section}}': (recipient as any).section || recipient.metadata?.section || ''
+        '{{section}}': (recipient as any).section || recipient.metadata?.section || '',
+        '{{attachment_filename}}': (recipient.attachments && recipient.attachments.length > 0 && recipient.attachments[0].filename)
+            ? recipient.attachments[0].filename
+            : `${(recipient.reg_no || 'CERTIFICATE').trim().replace(/[/\\?%*:|"<>]/g, '_')}.png`,
+        '{{attachment_file}}': (recipient.attachments && recipient.attachments.length > 0 && recipient.attachments[0].filename)
+            ? recipient.attachments[0].filename
+            : `${(recipient.reg_no || 'CERTIFICATE').trim().replace(/[/\\?%*:|"<>]/g, '_')}.png`
     }
 
     // Also support any custom metadata keys as placeholders: {{key}}
@@ -493,7 +499,16 @@ export function replacePlaceholders(
         result = result.split(key).join(val)
     }
 
-    // Safeguard: If the template contained literal "Official Certificate of Achievement" or "Certificate of Achievement",
+    // Replace any legacy {{reg_no}}.png or .jpg occurrences with the actual attachment filename
+    const resolvedAttachmentFilename = map['{{attachment_filename}}']
+    if (recipient.reg_no) {
+        result = result.split(`${recipient.reg_no}.png`).join(resolvedAttachmentFilename)
+        result = result.split(`${recipient.reg_no}.jpg`).join(resolvedAttachmentFilename)
+    }
+    result = result.split('{{reg_no}}.png').join(resolvedAttachmentFilename)
+    result = result.split('{{reg_no}}.jpg').join(resolvedAttachmentFilename)
+
+    // Safeguard 1: If the template contained literal "Official Certificate of Achievement" or "Certificate of Achievement",
     // but this recipient is a Participation participant (or not a winner), replace it with their true title!
     if (
         !lowerTier.includes('winner') &&
@@ -507,6 +522,11 @@ export function replacePlaceholders(
     ) {
         result = result.split('Official Certificate of Achievement').join(certTitle)
         result = result.split('Certificate of Achievement').join(certTitle)
+    } else {
+        // Safeguard 2: If the recipient IS a winner, but the template contained "Official Certificate of Participation",
+        // upgrade it to their true title (e.g. Official Certificate of Achievement)!
+        result = result.split('Official Certificate of Participation').join(certTitle)
+        result = result.split('Certificate of Participation').join(certTitle)
     }
 
     return result

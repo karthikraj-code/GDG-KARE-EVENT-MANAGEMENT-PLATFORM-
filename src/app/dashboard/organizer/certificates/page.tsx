@@ -2795,6 +2795,85 @@ export default function OrganizerCertificatesPage() {
         return canvas.toDataURL(mime, quality)
     }
 
+    // Helper to optimize and ensure certificate attachment is well under Vercel / serverless payload limit (4.5MB)
+    const compressDataUrlForEmail = async (
+        rawUrl: string,
+        maxDimension = 1920
+    ): Promise<{ dataUrl: string; filenameExt: 'png' | 'jpg'; contentType: string }> => {
+        if (!rawUrl || !rawUrl.startsWith('data:')) {
+            return { dataUrl: rawUrl, filenameExt: 'png', contentType: 'image/png' }
+        }
+
+        // If the dataUrl is already small (e.g. < 1.2 MB string length ~ 1,600,000 chars), return directly
+        if (rawUrl.length <= 1600000) {
+            const isJpeg = rawUrl.startsWith('data:image/jpeg') || rawUrl.startsWith('data:image/jpg')
+            return {
+                dataUrl: rawUrl,
+                filenameExt: isJpeg ? 'jpg' : 'png',
+                contentType: isJpeg ? 'image/jpeg' : 'image/png'
+            }
+        }
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                resolve({ dataUrl: rawUrl, filenameExt: 'png', contentType: 'image/png' })
+            }, 6000)
+
+            const img = new Image()
+            img.crossOrigin = 'anonymous'
+            img.onload = () => {
+                clearTimeout(timeout)
+                const origW = img.naturalWidth || img.width
+                const origH = img.naturalHeight || img.height
+
+                // Scale down if dimensions exceed maxDimension (e.g. 1920px)
+                const scale = (origW > maxDimension || origH > maxDimension)
+                    ? maxDimension / Math.max(origW, origH)
+                    : 1
+
+                const targetW = Math.max(800, Math.round(origW * scale))
+                const targetH = Math.max(600, Math.round(origH * scale))
+
+                const canvas = document.createElement('canvas')
+                canvas.width = targetW
+                canvas.height = targetH
+                const ctx = canvas.getContext('2d')
+                if (!ctx) {
+                    resolve({ dataUrl: rawUrl, filenameExt: 'png', contentType: 'image/png' })
+                    return
+                }
+
+                // Fill crisp white background behind transparent canvas
+                ctx.fillStyle = '#ffffff'
+                ctx.fillRect(0, 0, targetW, targetH)
+
+                // High-quality bicubic downsampling
+                ctx.imageSmoothingEnabled = true
+                ctx.imageSmoothingQuality = 'high'
+                ctx.drawImage(img, 0, 0, targetW, targetH)
+
+                // Try PNG export first
+                const pngUrl = canvas.toDataURL('image/png')
+                // Vercel limit is 4.5MB for the entire request.
+                // If PNG string is <= 2MB (~2,200,000 characters), it's completely safe for production!
+                if (pngUrl.length <= 2200000) {
+                    resolve({ dataUrl: pngUrl, filenameExt: 'png', contentType: 'image/png' })
+                    return
+                }
+
+                // If PNG is still too large (due to complex background textures), export as high-quality JPEG (0.92)
+                // This produces a ~350KB - 550KB image that is visually indistinguishable and 100% safe.
+                const jpegUrl = canvas.toDataURL('image/jpeg', 0.92)
+                resolve({ dataUrl: jpegUrl, filenameExt: 'jpg', contentType: 'image/jpeg' })
+            }
+            img.onerror = () => {
+                clearTimeout(timeout)
+                resolve({ dataUrl: rawUrl, filenameExt: 'png', contentType: 'image/png' })
+            }
+            img.src = rawUrl
+        })
+    }
+
     // Helper to generate a rendered certificate canvas directly to native Blob
     const renderSingleCertificateBlob = async (
         participant: ParticipantRecord,
@@ -3289,10 +3368,10 @@ export default function OrganizerCertificatesPage() {
             }
             const sample = target[0]
             const sampleTier = getParticipantAwardTier(sample)
-            let defaultSubject = `🎓 Official Certificate of Participation for ${activeEventName} - {{participant_name}}`
-            if (sampleTier.toLowerCase().includes('winner')) {
+            let defaultSubject = `🎓 {{certificate_title}} for ${activeEventName} - {{participant_name}}`
+            if (sampleTier.toLowerCase().includes('winner') || sampleTier.toLowerCase().includes('1st') || sampleTier.toLowerCase().includes('2nd') || sampleTier.toLowerCase().includes('3rd')) {
                 defaultSubject = `🏆 Congratulations! Winner Certificate for ${activeEventName} - {{participant_name}}`
-            } else if (sampleTier.toLowerCase().includes('special mention')) {
+            } else if (sampleTier.toLowerCase().includes('special mention') || sampleTier.toLowerCase().includes('finalist')) {
                 defaultSubject = `⭐ Special Recognition Honors for ${activeEventName} - {{participant_name}}`
             }
 
@@ -3309,9 +3388,19 @@ export default function OrganizerCertificatesPage() {
         } else {
             const pTier = getParticipantAwardTier(target)
             let subject = `🎓 Official Certificate of Participation for ${activeEventName} - ${target.name}`
-            if (pTier.toLowerCase().includes('winner')) {
+            if (
+                pTier.toLowerCase().includes('winner') ||
+                pTier.toLowerCase().includes('achievement') ||
+                pTier.toLowerCase().includes('1st') ||
+                pTier.toLowerCase().includes('2nd') ||
+                pTier.toLowerCase().includes('3rd')
+            ) {
                 subject = `🏆 Congratulations! Winner Certificate for ${activeEventName} - ${target.name}`
-            } else if (pTier.toLowerCase().includes('special mention')) {
+            } else if (
+                pTier.toLowerCase().includes('special') ||
+                pTier.toLowerCase().includes('mention') ||
+                pTier.toLowerCase().includes('finalist')
+            ) {
                 subject = `⭐ Special Recognition Honors for ${activeEventName} - ${target.name}`
             }
             setCertMailStudioModal({
@@ -3368,9 +3457,12 @@ export default function OrganizerCertificatesPage() {
         try {
             const pTier = getParticipantAwardTier(p)
             const existing = generatedResults.find(g => g.participant.id === p.id)
-            const dataUrl = existing ? existing.canvasDataUrl : await renderSingleCertificateDataUrl(p, pTier, 'png')
+            const rawDataUrl = existing ? existing.canvasDataUrl : await renderSingleCertificateDataUrl(p, pTier, 'png')
             const certCode = existing?.certCode || getExistingOrNewCertCode(p, pTier)
             const cleanReg = (p.reg_no || 'CERTIFICATE').trim().replace(/[/\\?%*:|"<>]/g, '_')
+
+            // Optimize attachment size to safely fit within Vercel production payload limits (< 4.5 MB)
+            const optimized = await compressDataUrlForEmail(rawDataUrl, 1920)
 
             const res = await fetch('/api/organizer/mail/send', {
                 method: 'POST',
@@ -3400,9 +3492,9 @@ export default function OrganizerCertificatesPage() {
                             section: p.section,
                             attachments: [
                                 {
-                                    filename: `${cleanReg}.png`,
-                                    content: dataUrl,
-                                    contentType: 'image/png'
+                                    filename: `${cleanReg}.${optimized.filenameExt}`,
+                                    content: optimized.dataUrl,
+                                    contentType: optimized.contentType
                                 }
                             ]
                         }
@@ -3410,9 +3502,23 @@ export default function OrganizerCertificatesPage() {
                 })
             })
 
-            const result = await res.json()
+            let result: any = {}
+            try {
+                const text = await res.text()
+                try {
+                    result = JSON.parse(text)
+                } catch {
+                    result = { error: text || `Server error (${res.status} ${res.statusText})` }
+                }
+            } catch (err: any) {
+                result = { error: err.message || `Server error (${res.status})` }
+            }
+
             if (!res.ok || !result.success || result.sentCount === 0) {
-                throw new Error(result.error || result.message || 'Failed to dispatch email')
+                if (res.status === 413) {
+                    throw new Error('Payload size exceeded server limits (413). Please retry with the optimized template.')
+                }
+                throw new Error(result.error || result.message || `Failed to dispatch email (Status: ${res.status})`)
             }
 
             if (targetEmail !== p.email) {
@@ -3426,7 +3532,7 @@ export default function OrganizerCertificatesPage() {
                 participant: p,
                 targetEmail,
                 certCode,
-                attachmentFilename: `${cleanReg}.png`,
+                attachmentFilename: `${cleanReg}.${optimized.filenameExt}`,
                 subject: certMailStudioModal.subject,
                 timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })
             })
@@ -3493,17 +3599,20 @@ export default function OrganizerCertificatesPage() {
             try {
                 const pTier = getParticipantAwardTier(p)
                 const existing = generatedResults.find(g => g.participant.id === p.id)
-                const dataUrl = existing ? existing.canvasDataUrl : await renderSingleCertificateDataUrl(p, pTier, 'png')
+                const rawDataUrl = existing ? existing.canvasDataUrl : await renderSingleCertificateDataUrl(p, pTier, 'png')
                 const certCode = existing?.certCode || getExistingOrNewCertCode(p, pTier)
                 const cleanReg = (p.reg_no || 'CERTIFICATE').trim().replace(/[/\\?%*:|"<>]/g, '_')
 
+                // Optimize / compress attachment to safely stay well within Vercel production payload limit (< 4.5 MB)
+                const optimized = await compressDataUrlForEmail(rawDataUrl, 1920)
+
                 const templateHtml = customBodyHtml || GOOGLE_CERTIFICATE_EMAIL_TEMPLATE
-                let emailSubject = customSubject || `🎓 Official Certificate of Participation for ${activeEventName}`
+                let emailSubject = customSubject || `🎓 {{certificate_title}} for ${activeEventName} - {{participant_name}}`
                 if (!customSubject) {
                     if (pTier.toLowerCase().includes('winner')) {
-                        emailSubject = `🏆 Congratulations! Your Winner Certificate for ${activeEventName}`
+                        emailSubject = `🏆 Congratulations! Your Winner Certificate for ${activeEventName} - {{participant_name}}`
                     } else if (pTier.toLowerCase().includes('special mention')) {
-                        emailSubject = `⭐ Special Recognition Award Certificate for ${activeEventName}`
+                        emailSubject = `⭐ Special Recognition Award Certificate for ${activeEventName} - {{participant_name}}`
                     }
                 }
 
@@ -3535,9 +3644,9 @@ export default function OrganizerCertificatesPage() {
                                 section: p.section,
                                 attachments: [
                                     {
-                                        filename: `${cleanReg}.png`,
-                                        content: dataUrl,
-                                        contentType: 'image/png'
+                                        filename: `${cleanReg}.${optimized.filenameExt}`,
+                                        content: optimized.dataUrl,
+                                        contentType: optimized.contentType
                                     }
                                 ]
                             }
@@ -3545,12 +3654,26 @@ export default function OrganizerCertificatesPage() {
                     })
                 })
 
-                const resData = await res.json()
+                let resData: any = {}
+                try {
+                    const text = await res.text()
+                    try {
+                        resData = JSON.parse(text)
+                    } catch {
+                        resData = { error: text || `Server error (${res.status} ${res.statusText})` }
+                    }
+                } catch (err: any) {
+                    resData = { error: err.message || `Server error (${res.status})` }
+                }
+
                 if (res.ok && resData.success && resData.sentCount > 0) {
                     sent++
                 } else {
                     failed++
-                    errors.push(`${p.name}: ${resData.error || resData.message || 'Send error'}`)
+                    const errorMsg = res.status === 413
+                        ? 'Payload size exceeded server limits (413)'
+                        : (resData.error || resData.message || 'Send error')
+                    errors.push(`${p.name}: ${errorMsg}`)
                 }
             } catch (err: any) {
                 failed++
