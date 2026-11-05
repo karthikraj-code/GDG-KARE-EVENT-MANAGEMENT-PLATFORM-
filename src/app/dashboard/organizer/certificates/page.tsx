@@ -2427,10 +2427,8 @@ export default function OrganizerCertificatesPage() {
     // Download Single Certificate as PNG
     const downloadSingle = async (res: { participant: ParticipantRecord; certCode: string; canvasDataUrl: string; tier?: string }) => {
         try {
-            const cleanName = (res.participant.name || 'Participant').replace(/[^a-zA-Z0-9]/g, '_')
-            const cleanReg = (res.participant.reg_no || 'CERT').replace(/[^a-zA-Z0-9]/g, '_')
-            const certTier = res.tier || selectedCertType
-            const cleanTier = certTier.replace(/[^a-zA-Z0-9]/g, '_')
+            const rawReg = (res.participant.reg_no || '').trim()
+            const cleanReg = rawReg ? rawReg.replace(/[/\\?%*:|"<>]/g, '_') : (res.participant.name || 'Certificate').trim().replace(/[/\\?%*:|"<>]/g, '_')
 
             if (!res.canvasDataUrl || !res.canvasDataUrl.startsWith('data:image')) {
                 showToast('error', 'Certificate image is missing or invalid. Please re-generate.')
@@ -2438,7 +2436,7 @@ export default function OrganizerCertificatesPage() {
             }
 
             const blob = dataUrlToBlob(res.canvasDataUrl)
-            triggerFileDownload(blob, `Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`)
+            triggerFileDownload(blob, `${cleanReg}.png`)
             showToast('success', `Downloaded PNG certificate for ${res.participant.name}`)
         } catch (err: any) {
             console.error('Download single PNG failed:', err)
@@ -2455,17 +2453,24 @@ export default function OrganizerCertificatesPage() {
 
         try {
             const zip = new JSZip()
+            const usedNames = new Set<string>()
             showToast('info', `Packaging ${generatedResults.length} PNG certificates into ZIP archive...`)
 
             for (let i = 0; i < generatedResults.length; i++) {
                 const item = generatedResults[i]
-                const cleanName = (item.participant.name || 'Participant').replace(/[^a-zA-Z0-9]/g, '_')
-                const cleanReg = (item.participant.reg_no || `P${i + 1}`).replace(/[^a-zA-Z0-9]/g, '_')
-                const itemTier = item.tier || selectedCertType
-                const cleanTier = itemTier.replace(/[^a-zA-Z0-9]/g, '_')
+                const rawReg = (item.participant.reg_no || '').trim()
+                const cleanReg = rawReg ? rawReg.replace(/[/\\?%*:|"<>]/g, '_') : (item.participant.name || `Certificate_${i + 1}`).trim().replace(/[/\\?%*:|"<>]/g, '_')
+
+                let fileName = `${cleanReg}.png`
+                let count = 1
+                while (usedNames.has(fileName.toLowerCase())) {
+                    fileName = `${cleanReg}_${count}.png`
+                    count++
+                }
+                usedNames.add(fileName.toLowerCase())
 
                 const blob = dataUrlToBlob(item.canvasDataUrl)
-                zip.file(`Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`, blob)
+                zip.file(fileName, blob)
             }
 
             const content = await zip.generateAsync({ type: 'blob' })
@@ -2940,12 +2945,11 @@ export default function OrganizerCertificatesPage() {
                 const tierId = signingItems[0].tierId
                 const certCode = signingItems[0].certCode
                 const token = tokens[0]
-                const cleanName = (p.name || 'Participant').replace(/[^a-zA-Z0-9]/g, '_')
-                const cleanReg = (p.reg_no || 'P1').replace(/[^a-zA-Z0-9]/g, '_')
-                const cleanTier = tierId.replace(/[^a-zA-Z0-9]/g, '_')
+                const rawReg = (p.reg_no || '').trim()
+                const cleanReg = rawReg ? rawReg.replace(/[/\\?%*:|"<>]/g, '_') : (p.name || 'Certificate').trim().replace(/[/\\?%*:|"<>]/g, '_')
 
                 const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95, undefined, certCode, token)
-                triggerFileDownload(blob, `Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`)
+                triggerFileDownload(blob, `${cleanReg}.png`)
                 showToast('success', `Downloaded PNG certificate for ${p.name}!`)
 
                 // Auto-persist single certificate to Supabase in background (ONLY for DB participants)
@@ -2975,6 +2979,7 @@ export default function OrganizerCertificatesPage() {
 
             // Batch download: Package into lightweight PNG ZIP archive
             const zip = new JSZip()
+            const usedNames = new Set<string>()
 
             for (let i = 0; i < targets.length; i++) {
                 const p = targets[i]
@@ -2994,12 +2999,19 @@ export default function OrganizerCertificatesPage() {
                     categoryLabel: cat.label
                 })
 
-                const cleanName = (p.name || 'Participant').replace(/[^a-zA-Z0-9]/g, '_')
-                const cleanReg = (p.reg_no || `P${i + 1}`).replace(/[^a-zA-Z0-9]/g, '_')
-                const cleanTier = tierId.replace(/[^a-zA-Z0-9]/g, '_')
+                const rawReg = (p.reg_no || '').trim()
+                const cleanReg = rawReg ? rawReg.replace(/[/\\?%*:|"<>]/g, '_') : (p.name || `Certificate_${i + 1}`).trim().replace(/[/\\?%*:|"<>]/g, '_')
+
+                let fileName = `${cleanReg}.png`
+                let count = 1
+                while (usedNames.has(fileName.toLowerCase())) {
+                    fileName = `${cleanReg}_${count}.png`
+                    count++
+                }
+                usedNames.add(fileName.toLowerCase())
 
                 const { blob } = await renderSingleCertificateBlob(p, tierId, 'png', 0.95, undefined, certCode, token)
-                zip.file(`Certificate_${cleanTier}_${cleanReg}_${cleanName}.png`, blob)
+                zip.file(fileName, blob)
             }
 
             setDownloadProgress(prev => ({
