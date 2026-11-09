@@ -455,7 +455,3 @@ npx autocannon -c 50 -d 10 http://localhost:3000/api/problems
 5. Deploy!
 
 ---
-
-## 📄 License
-
-This project is open-source and available under the [MIT License](LICENSE).
