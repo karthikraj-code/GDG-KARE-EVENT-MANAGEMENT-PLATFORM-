@@ -7,6 +7,8 @@ const CERT_DB_NAME = 'hackare_cert_db'
 const CERT_DB_VERSION = 1
 const CERT_STORE_NAME = 'templates'
 
+const PRODUCT_SANS_FONT_STACK = "'Product Sans', 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+
 export interface StudioTemplateAsset {
     tier: string
     imageDataUrl: string
@@ -182,7 +184,7 @@ export async function renderCertificateStudioAttachment(
                 if (layout.name && layout.name.enabled !== false) {
                     let nameFontSize = layout.name.fontSize || 72
                     const fontWeight = layout.name.fontWeight || 'bold'
-                    const fontFamily = layout.name.fontFamily || 'Georgia, serif'
+                    const fontFamily = layout.name.fontFamily || PRODUCT_SANS_FONT_STACK
                     ctx.font = `${fontWeight} ${nameFontSize}px ${fontFamily}`
 
                     const maxAllowedNameWidth = layout.name.maxWidth || Math.round(width * 0.6)
@@ -200,7 +202,8 @@ export async function renderCertificateStudioAttachment(
 
                 // 3. Reg No
                 if (layout.regNo && layout.regNo.enabled !== false && recipient.reg_no) {
-                    ctx.font = `${layout.regNo.fontWeight || 'normal'} ${layout.regNo.fontSize || 28}px ${layout.regNo.fontFamily || 'Arial, sans-serif'}`
+                    const regFontFamily = layout.regNo.fontFamily || PRODUCT_SANS_FONT_STACK
+                    ctx.font = `${layout.regNo.fontWeight || '600'} ${layout.regNo.fontSize || 28}px ${regFontFamily}`
                     ctx.fillStyle = layout.regNo.color || '#475569'
                     ctx.textAlign = 'center'
                     const prefix = layout.regNo.prefix || 'Reg No: '
@@ -208,16 +211,23 @@ export async function renderCertificateStudioAttachment(
                 }
 
                 // 4. Academic Credit / Category (e.g. Group 3, EE Credit)
-                if (layout.credit && layout.credit.enabled !== false && recipient.category) {
-                    ctx.font = `${layout.credit.fontWeight || 'bold'} ${layout.credit.fontSize || 24}px ${layout.credit.fontFamily || 'Arial, sans-serif'}`
+                if (layout.credit && layout.credit.enabled !== false && recipient.category && recipient.category !== 'Not Eligible') {
+                    const creditFontFamily = layout.credit.fontFamily || PRODUCT_SANS_FONT_STACK
+                    ctx.font = `${layout.credit.fontWeight || '600'} ${layout.credit.fontSize || 24}px ${creditFontFamily}`
                     ctx.fillStyle = layout.credit.color || '#2563eb'
-                    ctx.textAlign = layout.credit.align || 'center'
-                    ctx.fillText(String(recipient.category), layout.credit.x || width / 2, layout.credit.y || height * 0.58)
+                    ctx.textAlign = layout.credit.align || 'left'
+                    const prefix = layout.credit.prefix || ''
+                    const catStr = String(recipient.category || '').toLowerCase()
+                    const yearStr = String((recipient as any).year || recipient.metadata?.year || '').toLowerCase()
+                    const is2nd = catStr.includes('group 3') || yearStr.includes('2nd') || yearStr.includes('second')
+                    const creditText = is2nd ? (layout.credit.text2ndYear || 'Non CGPA - Group 3') : (layout.credit.text3rd4thYear || '2 EE credit')
+                    ctx.fillText(`${prefix}${creditText}`, layout.credit.x || width / 2, layout.credit.y || height * 0.58)
                 }
 
                 // 5. Unique Certificate ID
                 if (layout.certId && layout.certId.enabled !== false) {
-                    ctx.font = `${layout.certId.fontWeight || 'normal'} ${layout.certId.fontSize || 20}px ${layout.certId.fontFamily || 'monospace'}`
+                    const certIdFontFamily = layout.certId.fontFamily || PRODUCT_SANS_FONT_STACK
+                    ctx.font = `${layout.certId.fontWeight || 'normal'} ${layout.certId.fontSize || 20}px ${certIdFontFamily}`
                     ctx.fillStyle = layout.certId.color || '#64748b'
                     ctx.textAlign = 'center'
                     const prefix = layout.certId.prefix || 'ID: '

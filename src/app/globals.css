@@ -1,9 +1,36 @@
+@import url('https://fonts.cdnfonts.com/css/product-sans');
 @import url('https://fonts.cdnfonts.com/css/google-sans');
 @import url('https://cdn.jsdelivr.net/gh/mortezaom/google-sans-cdn@master/fonts.css');
 @import "tailwindcss";
 
+/* Explicit font-face definitions for Product Sans (Regular 400, Semi Bold 600, Bold 700) */
+@font-face {
+  font-family: 'Product Sans';
+  font-style: normal;
+  font-weight: 400;
+  src: local('Product Sans'), local('Product Sans Regular'), local('Google Sans Regular'),
+    url('https://fonts.cdnfonts.com/s/14955/ProductSans-Regular.woff') format('woff');
+}
+
+@font-face {
+  font-family: 'Product Sans';
+  font-style: normal;
+  font-weight: 600;
+  src: local('Product Sans SemiBold'), local('Product Sans Medium'), local('Product Sans Bold'),
+    url('https://fonts.cdnfonts.com/s/14955/ProductSans-Medium.woff') format('woff'),
+    url('https://fonts.cdnfonts.com/s/14955/ProductSans-Bold.woff') format('woff');
+}
+
+@font-face {
+  font-family: 'Product Sans';
+  font-style: normal;
+  font-weight: 700;
+  src: local('Product Sans Bold'), local('Product Sans'), local('Google Sans Bold'),
+    url('https://fonts.cdnfonts.com/s/14955/ProductSans-Bold.woff') format('woff');
+}
+
 @theme {
-  --font-sans: 'Google Sans', 'Product Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: 'Product Sans', 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --color-background: #ffffff;
   --color-foreground: #000000;
 }
@@ -28,6 +55,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-button, a[role="button"] {
+button,
+a[role="button"] {
   touch-action: manipulation;
 }

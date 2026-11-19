@@ -261,6 +261,82 @@ interface LayoutConfig {
     }
 }
 
+export const PRODUCT_SANS_FONT_STACK = "'Product Sans', 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+
+export const normalizeFontFamily = (f?: string): string => {
+    if (!f || f.includes('Inter') || f.includes('Arial') || f.includes('Georgia') || f.includes('monospace') || !f.includes('Product Sans')) {
+        return PRODUCT_SANS_FONT_STACK
+    }
+    return f
+}
+
+export const normalizeFontWeight = (w?: string): string => {
+    if (!w) return 'bold'
+    const lower = w.toLowerCase().trim()
+    if (lower === '400' || lower === 'regular' || lower === 'normal') return 'normal'
+    if (lower === '600' || lower === 'semibold' || lower === 'semi bold' || lower === 'semi-bold') return '600'
+    if (lower === '700' || lower === 'bold') return 'bold'
+    if (lower === '800' || lower === 'extrabold' || lower === 'extra bold' || lower === 'bolder') return '800'
+    return w
+}
+
+export const getCanvasFontString = (fontWeight: string, fontSize: number, fontFamily?: string): string => {
+    const weight = normalizeFontWeight(fontWeight)
+    const family = normalizeFontFamily(fontFamily)
+    return `${weight} ${fontSize}px ${family}`
+}
+
+export const ensureProductSansLoaded = async (): Promise<void> => {
+    if (typeof document === 'undefined' || !('fonts' in document)) return
+    try {
+        await Promise.allSettled([
+            document.fonts.load('400 32px "Product Sans"'),
+            document.fonts.load('600 32px "Product Sans"'),
+            document.fonts.load('700 32px "Product Sans"'),
+            document.fonts.ready
+        ])
+    } catch { }
+}
+
+export const normalizeLayoutConfig = (raw: any): LayoutConfig => {
+    if (!raw) return DEFAULT_LAYOUT
+    return {
+        ...DEFAULT_LAYOUT,
+        ...raw,
+        name: {
+            ...DEFAULT_LAYOUT.name,
+            ...(raw.name || {}),
+            fontFamily: PRODUCT_SANS_FONT_STACK,
+            fontWeight: normalizeFontWeight(raw.name?.fontWeight || DEFAULT_LAYOUT.name.fontWeight)
+        },
+        regNo: {
+            ...DEFAULT_LAYOUT.regNo,
+            ...(raw.regNo || {}),
+            fontFamily: PRODUCT_SANS_FONT_STACK,
+            fontWeight: normalizeFontWeight(raw.regNo?.fontWeight || DEFAULT_LAYOUT.regNo.fontWeight)
+        },
+        certId: {
+            ...DEFAULT_LAYOUT.certId,
+            ...(raw.certId || {}),
+            fontFamily: PRODUCT_SANS_FONT_STACK,
+            fontWeight: normalizeFontWeight(raw.certId?.fontWeight || DEFAULT_LAYOUT.certId.fontWeight)
+        },
+        qrCode: {
+            ...DEFAULT_LAYOUT.qrCode,
+            ...(raw.qrCode || {})
+        },
+        credit: {
+            ...DEFAULT_CREDIT_LAYOUT,
+            ...(raw.credit || {}),
+            align: (raw.credit?.align === 'right' || (raw.credit?.align === 'center' && (raw.credit as any)?.explicitAlign))
+                ? raw.credit.align
+                : 'left',
+            fontFamily: PRODUCT_SANS_FONT_STACK,
+            fontWeight: normalizeFontWeight(raw.credit?.fontWeight || DEFAULT_CREDIT_LAYOUT.fontWeight)
+        }
+    }
+}
+
 export const DEFAULT_CREDIT_LAYOUT = {
     enabled: true,
     x: 960,
@@ -268,8 +344,8 @@ export const DEFAULT_CREDIT_LAYOUT = {
     fontSize: 22,
     fontWeight: '600',
     color: '#475569',
-    align: 'center' as CanvasTextAlign,
-    fontFamily: 'Inter, sans-serif',
+    align: 'left' as CanvasTextAlign,
+    fontFamily: PRODUCT_SANS_FONT_STACK,
     prefix: '',
     text2ndYear: 'Non CGPA - Group 3',
     text3rd4thYear: '2 EE credit',
@@ -307,7 +383,7 @@ const DEFAULT_LAYOUT: LayoutConfig = {
         fontWeight: 'bold',
         color: '#1e293b',
         align: 'center',
-        fontFamily: 'Inter, sans-serif',
+        fontFamily: PRODUCT_SANS_FONT_STACK,
         maxWidth: 3800
     },
     regNo: {
@@ -318,7 +394,7 @@ const DEFAULT_LAYOUT: LayoutConfig = {
         fontWeight: '600',
         color: '#475569',
         prefix: 'Registration No: ',
-        fontFamily: 'Inter, sans-serif'
+        fontFamily: PRODUCT_SANS_FONT_STACK
     },
     certId: {
         enabled: true,
@@ -328,7 +404,7 @@ const DEFAULT_LAYOUT: LayoutConfig = {
         fontWeight: 'bold',
         color: '#64748b',
         prefix: 'ID: ',
-        fontFamily: 'monospace'
+        fontFamily: PRODUCT_SANS_FONT_STACK
     },
     qrCode: {
         enabled: true,
@@ -775,6 +851,7 @@ export default function OrganizerCertificatesPage() {
     const [layout, setLayout] = useState<LayoutConfig>(DEFAULT_LAYOUT)
     const [activeElementToPosition, setActiveElementToPosition] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | 'credit' | null>(null)
     const [calibrationTab, setCalibrationTab] = useState<'name' | 'regNo' | 'certId' | 'qrCode' | 'credit'>('name')
+    const [creditPreviewMode, setCreditPreviewMode] = useState<'auto' | 'group3' | 'eeCredit'>('auto')
 
     // Generation state
     const [generating, setGenerating] = useState(false)
@@ -1392,7 +1469,7 @@ export default function OrganizerCertificatesPage() {
         const saved = localStorage.getItem('hackare_cert_layout')
         if (saved) {
             try {
-                setLayout(JSON.parse(saved))
+                setLayout(normalizeLayoutConfig(JSON.parse(saved)))
             } catch (e) {
                 console.error('Failed to parse saved layout', e)
             }
@@ -1469,7 +1546,7 @@ export default function OrganizerCertificatesPage() {
                                 imageDataUrl: t.image_data_url,
                                 fileName: t.file_name,
                                 dimensions: t.dimensions,
-                                layout: t.layout
+                                layout: normalizeLayoutConfig(t.layout)
                             }
                             // Save to IndexedDB cache
                             saveTemplateToIndexedDb(t.tier, loadedStore[t.tier])
@@ -1516,7 +1593,7 @@ export default function OrganizerCertificatesPage() {
                     setTemplateImage(img)
                     setTemplateDimensions(participationData.dimensions || { width: img.naturalWidth, height: img.naturalHeight })
                     setTemplateFileName(participationData.fileName || 'Participation Template')
-                    if (participationData.layout) setLayout(participationData.layout)
+                    if (participationData.layout) setLayout(normalizeLayoutConfig(participationData.layout))
                 }
                 img.src = participationData.imageDataUrl
                 return
@@ -1859,7 +1936,7 @@ export default function OrganizerCertificatesPage() {
                 setTemplateImage(img)
                 setTemplateDimensions(targetData.dimensions || { width: img.naturalWidth, height: img.naturalHeight })
                 setTemplateFileName(targetData.fileName || `${newType} Template`)
-                if (targetData.layout) setLayout(targetData.layout)
+                if (targetData.layout) setLayout(normalizeLayoutConfig(targetData.layout))
                 showToast('success', `Switched to ${newType}. Loaded custom template.`)
             }
             img.src = targetData.imageDataUrl
@@ -1899,13 +1976,13 @@ export default function OrganizerCertificatesPage() {
 
         // Subtitle / Banner
         ctx.fillStyle = accent
-        ctx.font = 'bold 28px Inter, sans-serif'
+        ctx.font = 'bold 28px ' + PRODUCT_SANS_FONT_STACK
         ctx.textAlign = 'center'
         ctx.fillText('GDG-KARE EVENT MANAGEMENT PLATFORM 2026', 960, 220)
 
         // Main Title
         ctx.fillStyle = '#f8fafc'
-        ctx.font = 'bold 56px Inter, sans-serif'
+        ctx.font = 'bold 56px ' + PRODUCT_SANS_FONT_STACK
         const matchWinner = tier.match(/Winner\s+(\d+)/i)
         if (matchWinner) {
             const rankNum = parseInt(matchWinner[1], 10)
@@ -1919,7 +1996,7 @@ export default function OrganizerCertificatesPage() {
         }
 
         ctx.fillStyle = '#94a3b8'
-        ctx.font = 'italic 24px Inter, sans-serif'
+        ctx.font = 'italic 24px ' + PRODUCT_SANS_FONT_STACK
         ctx.fillText('This certificate is proudly awarded to', 960, 480)
 
         // Placeholder line for name
@@ -1978,12 +2055,12 @@ export default function OrganizerCertificatesPage() {
             ctx.strokeRect(30, 30, width - 60, height - 60)
 
             ctx.fillStyle = '#f8fafc'
-            ctx.font = 'bold 50px Inter, sans-serif'
+            ctx.font = 'bold 50px ' + PRODUCT_SANS_FONT_STACK
             ctx.textAlign = 'center'
             ctx.fillText('UPLOAD CERTIFICATE TEMPLATE TO BEGIN', width / 2, height / 2 - 30)
 
             ctx.fillStyle = '#94a3b8'
-            ctx.font = '24px Inter, sans-serif'
+            ctx.font = '24px ' + PRODUCT_SANS_FONT_STACK
             ctx.fillText('Or click "Use Sample Template" to test layout', width / 2, height / 2 + 30)
         }
     }
@@ -2204,6 +2281,7 @@ export default function OrganizerCertificatesPage() {
             })
 
             const tokens = await requestCertificateTokens(signingItems.map(s => s.item))
+            await ensureProductSansLoaded()
 
             for (let i = 0; i < selected.length; i++) {
                 const p = selected[i]
@@ -2228,7 +2306,7 @@ export default function OrganizerCertificatesPage() {
 
                 // 2. Draw Name
                 if (layout.name.enabled !== false) {
-                    ctx.font = `${layout.name.fontWeight} ${layout.name.fontSize}px ${layout.name.fontFamily}`
+                    ctx.font = getCanvasFontString(layout.name.fontWeight, layout.name.fontSize, layout.name.fontFamily)
                     ctx.fillStyle = layout.name.color
                     ctx.textAlign = layout.name.align
                     ctx.fillText(p.name, layout.name.x, layout.name.y)
@@ -2236,7 +2314,7 @@ export default function OrganizerCertificatesPage() {
 
                 // 3. Draw Reg No
                 if (layout.regNo.enabled !== false) {
-                    ctx.font = `${layout.regNo.fontWeight} ${layout.regNo.fontSize}px ${layout.regNo.fontFamily}`
+                    ctx.font = getCanvasFontString(layout.regNo.fontWeight, layout.regNo.fontSize, layout.regNo.fontFamily)
                     ctx.fillStyle = layout.regNo.color
                     ctx.textAlign = 'center'
                     ctx.fillText(`${layout.regNo.prefix}${p.reg_no}`, layout.regNo.x, layout.regNo.y)
@@ -2247,16 +2325,16 @@ export default function OrganizerCertificatesPage() {
                 if (creditLayout.enabled !== false) {
                     const creditText = getParticipantCreditText(p, creditLayout)
                     if (creditText) {
-                        ctx.font = `${creditLayout.fontWeight} ${creditLayout.fontSize}px ${creditLayout.fontFamily}`
+                        ctx.font = getCanvasFontString(creditLayout.fontWeight, creditLayout.fontSize, creditLayout.fontFamily)
                         ctx.fillStyle = creditLayout.color
-                        ctx.textAlign = creditLayout.align
+                        ctx.textAlign = creditLayout.align || 'left'
                         ctx.fillText(creditText, creditLayout.x, creditLayout.y)
                     }
                 }
 
                 // 4. Draw Unique Cert ID
                 if (layout.certId.enabled !== false) {
-                    ctx.font = `${layout.certId.fontWeight} ${layout.certId.fontSize}px ${layout.certId.fontFamily}`
+                    ctx.font = getCanvasFontString(layout.certId.fontWeight, layout.certId.fontSize, layout.certId.fontFamily)
                     ctx.fillStyle = layout.certId.color
                     ctx.textAlign = 'center'
                     ctx.fillText(`${layout.certId.prefix}${certCode}`, layout.certId.x, layout.certId.y)
@@ -2487,6 +2565,7 @@ export default function OrganizerCertificatesPage() {
             const offscreenCanvas = document.createElement('canvas')
             const ctx = offscreenCanvas.getContext('2d')
             if (!ctx) throw new Error('Could not create canvas context.')
+            await ensureProductSansLoaded()
 
             for (let i = 0; i < targets.length; i++) {
                 const p = targets[i]
@@ -2520,13 +2599,13 @@ export default function OrganizerCertificatesPage() {
                 // 2. Name with smart dynamic auto-fitting
                 if (tLayout.name.enabled !== false) {
                     let actualNameFontSize = tLayout.name.fontSize
-                    ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+                    ctx.font = getCanvasFontString(tLayout.name.fontWeight, actualNameFontSize, tLayout.name.fontFamily)
                     const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
                     const measuredNameWidth = ctx.measureText(p.name).width
                     if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
                         const scaleFactor = maxAllowedNameWidth / measuredNameWidth
                         actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
-                        ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+                        ctx.font = getCanvasFontString(tLayout.name.fontWeight, actualNameFontSize, tLayout.name.fontFamily)
                     }
                     ctx.fillStyle = tLayout.name.color
                     ctx.textAlign = tLayout.name.align
@@ -2535,7 +2614,7 @@ export default function OrganizerCertificatesPage() {
 
                 // 3. Reg No
                 if (tLayout.regNo.enabled !== false) {
-                    ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
+                    ctx.font = getCanvasFontString(tLayout.regNo.fontWeight, tLayout.regNo.fontSize, tLayout.regNo.fontFamily)
                     ctx.fillStyle = tLayout.regNo.color
                     ctx.textAlign = 'center'
                     ctx.fillText(`${tLayout.regNo.prefix}${p.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
@@ -2546,16 +2625,16 @@ export default function OrganizerCertificatesPage() {
                 if (creditLayout.enabled !== false) {
                     const creditText = getParticipantCreditText(p, creditLayout)
                     if (creditText) {
-                        ctx.font = `${creditLayout.fontWeight} ${creditLayout.fontSize}px ${creditLayout.fontFamily}`
+                        ctx.font = getCanvasFontString(creditLayout.fontWeight, creditLayout.fontSize, creditLayout.fontFamily)
                         ctx.fillStyle = creditLayout.color
-                        ctx.textAlign = creditLayout.align
+                        ctx.textAlign = creditLayout.align || 'left'
                         ctx.fillText(creditText, creditLayout.x, creditLayout.y)
                     }
                 }
 
                 // 4. Cert ID
                 if (tLayout.certId.enabled !== false) {
-                    ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
+                    ctx.font = getCanvasFontString(tLayout.certId.fontWeight, tLayout.certId.fontSize, tLayout.certId.fontFamily)
                     ctx.fillStyle = tLayout.certId.color
                     ctx.textAlign = 'center'
                     ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
@@ -2729,6 +2808,8 @@ export default function OrganizerCertificatesPage() {
             ? `${origin}/verify-certificate?token=${encodeURIComponent(certToken)}`
             : `${origin}/verify-certificate?id=${certCode}`
 
+        await ensureProductSansLoaded()
+
         // 1. Template Image
         ctx.clearRect(0, 0, asset.width, asset.height)
         ctx.drawImage(asset.img, 0, 0, asset.width, asset.height)
@@ -2736,13 +2817,13 @@ export default function OrganizerCertificatesPage() {
         // 2. Name with smart dynamic auto-fitting to prevent overflowing placeholder lines
         if (tLayout.name.enabled !== false) {
             let actualNameFontSize = tLayout.name.fontSize
-            ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+            ctx.font = getCanvasFontString(tLayout.name.fontWeight, actualNameFontSize, tLayout.name.fontFamily)
             const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
             const measuredNameWidth = ctx.measureText(participant.name).width
             if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
                 const scaleFactor = maxAllowedNameWidth / measuredNameWidth
                 actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
-                ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+                ctx.font = getCanvasFontString(tLayout.name.fontWeight, actualNameFontSize, tLayout.name.fontFamily)
             }
             ctx.fillStyle = tLayout.name.color
             ctx.textAlign = tLayout.name.align
@@ -2751,7 +2832,7 @@ export default function OrganizerCertificatesPage() {
 
         // 3. Reg No
         if (tLayout.regNo.enabled !== false) {
-            ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
+            ctx.font = getCanvasFontString(tLayout.regNo.fontWeight, tLayout.regNo.fontSize, tLayout.regNo.fontFamily)
             ctx.fillStyle = tLayout.regNo.color
             ctx.textAlign = 'center'
             ctx.fillText(`${tLayout.regNo.prefix}${participant.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
@@ -2762,16 +2843,16 @@ export default function OrganizerCertificatesPage() {
         if (creditLayoutDataUrl.enabled !== false) {
             const creditTextDataUrl = getParticipantCreditText(participant, creditLayoutDataUrl)
             if (creditTextDataUrl) {
-                ctx.font = `${creditLayoutDataUrl.fontWeight} ${creditLayoutDataUrl.fontSize}px ${creditLayoutDataUrl.fontFamily}`
+                ctx.font = getCanvasFontString(creditLayoutDataUrl.fontWeight, creditLayoutDataUrl.fontSize, creditLayoutDataUrl.fontFamily)
                 ctx.fillStyle = creditLayoutDataUrl.color
-                ctx.textAlign = creditLayoutDataUrl.align
+                ctx.textAlign = creditLayoutDataUrl.align || 'left'
                 ctx.fillText(creditTextDataUrl, creditLayoutDataUrl.x, creditLayoutDataUrl.y)
             }
         }
 
         // 4. Cert ID
         if (tLayout.certId.enabled !== false) {
-            ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
+            ctx.font = getCanvasFontString(tLayout.certId.fontWeight, tLayout.certId.fontSize, tLayout.certId.fontFamily)
             ctx.fillStyle = tLayout.certId.color
             ctx.textAlign = 'center'
             ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
@@ -2917,19 +2998,21 @@ export default function OrganizerCertificatesPage() {
             ? `${origin}/verify-certificate?token=${encodeURIComponent(certToken)}`
             : `${origin}/verify-certificate?id=${certCode}`
 
+        await ensureProductSansLoaded()
+
         // Draw Template
         ctx.drawImage(asset.img, 0, 0, asset.width, asset.height)
 
         // Name with smart dynamic auto-fitting
         if (tLayout.name.enabled !== false) {
             let actualNameFontSize = tLayout.name.fontSize
-            ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+            ctx.font = getCanvasFontString(tLayout.name.fontWeight, actualNameFontSize, tLayout.name.fontFamily)
             const maxAllowedNameWidth = tLayout.name.maxWidth || (asset.width > 3000 ? 3800 : Math.round(asset.width * 0.55))
             const measuredNameWidth = ctx.measureText(participant.name).width
             if (measuredNameWidth > maxAllowedNameWidth && maxAllowedNameWidth > 0) {
                 const scaleFactor = maxAllowedNameWidth / measuredNameWidth
                 actualNameFontSize = Math.max(30, Math.floor(actualNameFontSize * scaleFactor))
-                ctx.font = `${tLayout.name.fontWeight} ${actualNameFontSize}px ${tLayout.name.fontFamily}`
+                ctx.font = getCanvasFontString(tLayout.name.fontWeight, actualNameFontSize, tLayout.name.fontFamily)
             }
             ctx.fillStyle = tLayout.name.color
             ctx.textAlign = tLayout.name.align
@@ -2938,7 +3021,7 @@ export default function OrganizerCertificatesPage() {
 
         // Reg No
         if (tLayout.regNo.enabled !== false) {
-            ctx.font = `${tLayout.regNo.fontWeight} ${tLayout.regNo.fontSize}px ${tLayout.regNo.fontFamily}`
+            ctx.font = getCanvasFontString(tLayout.regNo.fontWeight, tLayout.regNo.fontSize, tLayout.regNo.fontFamily)
             ctx.fillStyle = tLayout.regNo.color
             ctx.textAlign = 'center'
             ctx.fillText(`${tLayout.regNo.prefix}${participant.reg_no}`, tLayout.regNo.x, tLayout.regNo.y)
@@ -2949,16 +3032,16 @@ export default function OrganizerCertificatesPage() {
         if (creditLayoutBlob.enabled !== false) {
             const creditTextBlob = getParticipantCreditText(participant, creditLayoutBlob)
             if (creditTextBlob) {
-                ctx.font = `${creditLayoutBlob.fontWeight} ${creditLayoutBlob.fontSize}px ${creditLayoutBlob.fontFamily}`
+                ctx.font = getCanvasFontString(creditLayoutBlob.fontWeight, creditLayoutBlob.fontSize, creditLayoutBlob.fontFamily)
                 ctx.fillStyle = creditLayoutBlob.color
-                ctx.textAlign = creditLayoutBlob.align
+                ctx.textAlign = creditLayoutBlob.align || 'left'
                 ctx.fillText(creditTextBlob, creditLayoutBlob.x, creditLayoutBlob.y)
             }
         }
 
         // Cert ID
         if (tLayout.certId.enabled !== false) {
-            ctx.font = `${tLayout.certId.fontWeight} ${tLayout.certId.fontSize}px ${tLayout.certId.fontFamily}`
+            ctx.font = getCanvasFontString(tLayout.certId.fontWeight, tLayout.certId.fontSize, tLayout.certId.fontFamily)
             ctx.fillStyle = tLayout.certId.color
             ctx.textAlign = 'center'
             ctx.fillText(`${tLayout.certId.prefix}${certCode}`, tLayout.certId.x, tLayout.certId.y)
@@ -3021,7 +3104,7 @@ export default function OrganizerCertificatesPage() {
         const tierId = cat.id === 'all' ? studentTier : cat.tierId
 
         // Retrieve calibrated layout for this tier to initialize live tuner
-        const tierLayout = templateStore[tierId]?.layout || layout || DEFAULT_LAYOUT
+        const tierLayout = normalizeLayoutConfig(templateStore[tierId]?.layout || layout || DEFAULT_LAYOUT)
         setPreviewLayout(tierLayout)
         setPreviewTunerSavedSuccess(false)
         setGeneratingPreview(true)
@@ -5130,18 +5213,22 @@ export default function OrganizerCertificatesPage() {
                                                 style={{
                                                     left: `${((layout.credit?.x ?? DEFAULT_CREDIT_LAYOUT.x) / templateDimensions.width) * 100}%`,
                                                     top: `${((layout.credit?.y ?? DEFAULT_CREDIT_LAYOUT.y) / templateDimensions.height) * 100}%`,
-                                                    transform: (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'center' ? 'translate(-50%, -50%)' : (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'right' ? 'translate(-100%, -50%)' : 'translate(0%, -50%)',
+                                                    transform: (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'center'
+                                                        ? 'translate(-50%, -50%)'
+                                                        : (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'right'
+                                                        ? 'translate(-100%, -50%)'
+                                                        : 'translate(0%, -50%)',
                                                     color: layout.credit?.color ?? DEFAULT_CREDIT_LAYOUT.color,
                                                     fontSize: `${Math.max(10, (layout.credit?.fontSize ?? DEFAULT_CREDIT_LAYOUT.fontSize) * previewScale)}px`,
                                                     fontWeight: layout.credit?.fontWeight ?? DEFAULT_CREDIT_LAYOUT.fontWeight,
                                                     fontFamily: layout.credit?.fontFamily ?? DEFAULT_CREDIT_LAYOUT.fontFamily
                                                 }}
                                                 className={`absolute cursor-grab active:cursor-grabbing group transition-all select-none whitespace-nowrap ${calibrationTab === 'credit'
-                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-2 py-0.5 shadow-xl'
-                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-2 py-0.5'
+                                                    ? 'ring-2 ring-emerald-400 bg-emerald-500/20 rounded-lg px-1.5 py-0.5 shadow-xl'
+                                                    : 'hover:ring-1 hover:ring-white/60 rounded-lg px-1.5 py-0.5'
                                                     }`}
                                             >
-                                                <div className={`absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'credit' || draggingElement === 'credit'
+                                                <div className={`absolute -top-7 ${(layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'left' ? 'left-0 translate-x-0' : (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === 'right' ? 'right-0 translate-x-0' : 'left-1/2 -translate-x-1/2'} whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full shadow border flex items-center gap-1 transition-all z-20 ${calibrationTab === 'credit' || draggingElement === 'credit'
                                                     ? 'opacity-100 bg-emerald-600 text-white border-emerald-400 shadow-emerald-950/40'
                                                     : 'opacity-0 group-hover:opacity-100 bg-slate-900/90 text-slate-200 border-slate-700'
                                                     }`}>
@@ -5172,19 +5259,26 @@ export default function OrganizerCertificatesPage() {
                                                     </button>
                                                 </div>
                                                 <span>
-                                                    {getParticipantCreditText(
-                                                        participants[previewIndex] || {
-                                                            id: 'sample',
-                                                            name: 'Alex Johnson',
-                                                            reg_no: '21BCE1092',
-                                                            dept: 'CSE',
-                                                            section: 'A',
-                                                            year: '2nd Year',
-                                                            category: 'Group 3',
-                                                            selected: true
-                                                        },
-                                                        layout.credit || DEFAULT_CREDIT_LAYOUT
-                                                    ) || (layout.credit?.text2ndYear || 'Non CGPA - Group 3')}
+                                                    {creditPreviewMode === 'eeCredit'
+                                                        ? `${layout.credit?.prefix || ''}${layout.credit?.text3rd4thYear || DEFAULT_CREDIT_LAYOUT.text3rd4thYear}`
+                                                        : creditPreviewMode === 'group3'
+                                                        ? `${layout.credit?.prefix || ''}${layout.credit?.text2ndYear || DEFAULT_CREDIT_LAYOUT.text2ndYear}`
+                                                        : (
+                                                            getParticipantCreditText(
+                                                                participants[previewIndex] || {
+                                                                    id: 'sample',
+                                                                    name: 'Alex Johnson',
+                                                                    reg_no: '21BCE1092',
+                                                                    dept: 'CSE',
+                                                                    section: 'A',
+                                                                    year: '2nd Year',
+                                                                    category: 'Group 3',
+                                                                    selected: true
+                                                                },
+                                                                layout.credit || DEFAULT_CREDIT_LAYOUT
+                                                            ) || (layout.credit?.text2ndYear || DEFAULT_CREDIT_LAYOUT.text2ndYear)
+                                                        )
+                                                    }
                                                 </span>
                                             </div>
                                         )}
@@ -5306,16 +5400,18 @@ export default function OrganizerCertificatesPage() {
                                         </div>
 
                                         <div>
-                                            <label className="text-gray-600 font-semibold block mb-1">Font Weight</label>
+                                            <label className="text-gray-600 font-semibold block mb-1 flex items-center justify-between">
+                                                <span>Font Weight</span>
+                                                <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200">Product Sans</span>
+                                            </label>
                                             <select
-                                                value={layout.name.fontWeight}
+                                                value={normalizeFontWeight(layout.name.fontWeight)}
                                                 onChange={(e) => setLayout({ ...layout, name: { ...layout.name, fontWeight: e.target.value } })}
-                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
+                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs font-semibold"
                                             >
-                                                <option value="normal">Normal (400)</option>
+                                                <option value="normal">Regular (400)</option>
                                                 <option value="600">Semi Bold (600)</option>
                                                 <option value="bold">Bold (700)</option>
-                                                <option value="800">Extra Bold (800)</option>
                                             </select>
                                         </div>
 
@@ -5424,6 +5520,22 @@ export default function OrganizerCertificatesPage() {
                                                 placeholder="e.g. Registration No: "
                                                 className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
                                             />
+                                        </div>
+
+                                        <div>
+                                            <label className="text-gray-600 font-semibold block mb-1 flex items-center justify-between">
+                                                <span>Font Weight</span>
+                                                <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200">Product Sans</span>
+                                            </label>
+                                            <select
+                                                value={normalizeFontWeight(layout.regNo.fontWeight)}
+                                                onChange={(e) => setLayout({ ...layout, regNo: { ...layout.regNo, fontWeight: e.target.value } })}
+                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs font-semibold"
+                                            >
+                                                <option value="normal">Regular (400)</option>
+                                                <option value="600">Semi Bold (600)</option>
+                                                <option value="bold">Bold (700)</option>
+                                            </select>
                                         </div>
 
                                         <div className="pt-2 border-t border-gray-200">
@@ -5641,9 +5753,12 @@ export default function OrganizerCertificatesPage() {
 
                                         {/* Font Weight */}
                                         <div>
-                                            <label className="text-gray-600 font-semibold block mb-1">Font Weight</label>
+                                            <label className="text-gray-600 font-semibold block mb-1 flex items-center justify-between">
+                                                <span>Font Weight</span>
+                                                <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200">Product Sans</span>
+                                            </label>
                                             <select
-                                                value={layout.credit?.fontWeight ?? DEFAULT_CREDIT_LAYOUT.fontWeight}
+                                                value={normalizeFontWeight(layout.credit?.fontWeight ?? DEFAULT_CREDIT_LAYOUT.fontWeight)}
                                                 onChange={(e) => {
                                                     const val = e.target.value
                                                     setLayout(prev => ({
@@ -5655,13 +5770,95 @@ export default function OrganizerCertificatesPage() {
                                                         }
                                                     }))
                                                 }}
-                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
+                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs font-semibold"
                                             >
-                                                <option value="normal">Normal (400)</option>
+                                                <option value="normal">Regular (400)</option>
                                                 <option value="600">Semi Bold (600)</option>
                                                 <option value="bold">Bold (700)</option>
-                                                <option value="800">Extra Bold (800)</option>
                                             </select>
+                                        </div>
+
+                                        {/* Text Alignment */}
+                                        <div>
+                                            <label className="text-gray-600 font-semibold block mb-1 flex items-center justify-between">
+                                                <span>Text Alignment</span>
+                                                <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-bold border border-emerald-200">Starts at X (Recommended)</span>
+                                            </label>
+                                            <div className="flex items-center gap-1">
+                                                {[
+                                                    { val: 'left', label: 'Left (Starts at X)' },
+                                                    { val: 'center', label: 'Center' },
+                                                    { val: 'right', label: 'Right' }
+                                                ].map(a => (
+                                                    <button
+                                                        key={a.val}
+                                                        type="button"
+                                                        onClick={() => setLayout(prev => ({
+                                                            ...prev,
+                                                            credit: {
+                                                                ...DEFAULT_CREDIT_LAYOUT,
+                                                                ...(prev.credit || {}),
+                                                                align: a.val as CanvasTextAlign,
+                                                                explicitAlign: true
+                                                            }
+                                                        }))}
+                                                        className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                                            (layout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === a.val
+                                                                ? 'bg-emerald-600 text-white shadow-xs'
+                                                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                                        }`}
+                                                    >
+                                                        {a.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <p className="text-[10px] text-gray-500 mt-1">
+                                                Left alignment anchors the text at coordinate X, ensuring both <strong>EE credit</strong> and <strong>Group 3</strong> start at the exact same position without overlapping certificate content.
+                                            </p>
+                                        </div>
+
+                                        {/* Test Preview Sample */}
+                                        <div className="bg-slate-50 p-2.5 rounded-xl border border-gray-200">
+                                            <div className="flex items-center justify-between mb-1.5">
+                                                <label className="text-[11px] font-bold text-gray-700">Test Preview at X</label>
+                                                <span className="text-[10px] text-gray-500">Live Length Check</span>
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCreditPreviewMode('eeCredit')}
+                                                    className={`flex-1 py-1 rounded text-[11px] font-bold cursor-pointer transition-all ${
+                                                        creditPreviewMode === 'eeCredit'
+                                                            ? 'bg-emerald-600 text-white shadow-2xs'
+                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
+                                                    }`}
+                                                >
+                                                    EE Credit
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCreditPreviewMode('group3')}
+                                                    className={`flex-1 py-1 rounded text-[11px] font-bold cursor-pointer transition-all ${
+                                                        creditPreviewMode === 'group3'
+                                                            ? 'bg-emerald-600 text-white shadow-2xs'
+                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
+                                                    }`}
+                                                >
+                                                    Group 3
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCreditPreviewMode('auto')}
+                                                    className={`px-2 py-1 rounded text-[11px] font-bold cursor-pointer transition-all ${
+                                                        creditPreviewMode === 'auto'
+                                                            ? 'bg-slate-800 text-white shadow-2xs'
+                                                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
+                                                    }`}
+                                                    title="Auto preview from selected participant"
+                                                >
+                                                    Auto
+                                                </button>
+                                            </div>
                                         </div>
 
                                         {/* Center Horizontally */}
@@ -5866,6 +6063,22 @@ export default function OrganizerCertificatesPage() {
                                                 placeholder="e.g. ID: "
                                                 className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs"
                                             />
+                                        </div>
+
+                                        <div>
+                                            <label className="text-gray-600 font-semibold block mb-1 flex items-center justify-between">
+                                                <span>Font Weight</span>
+                                                <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200">Product Sans</span>
+                                            </label>
+                                            <select
+                                                value={normalizeFontWeight(layout.certId.fontWeight)}
+                                                onChange={(e) => setLayout({ ...layout, certId: { ...layout.certId, fontWeight: e.target.value } })}
+                                                className="w-full bg-white border border-gray-300 rounded-lg p-2 text-xs font-semibold"
+                                            >
+                                                <option value="normal">Regular (400)</option>
+                                                <option value="600">Semi Bold (600)</option>
+                                                <option value="bold">Bold (700)</option>
+                                            </select>
                                         </div>
 
                                         <div className="pt-2 border-t border-gray-200">
@@ -6842,6 +7055,37 @@ export default function OrganizerCertificatesPage() {
                                                         </div>
                                                     </div>
                                                 </div>
+
+                                                {/* Font Weight (Product Sans) */}
+                                                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <label className="text-[10px] font-bold text-slate-400">Font Weight</label>
+                                                        <span className="text-[9px] bg-blue-950 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 font-bold">Product Sans</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        {[
+                                                            { val: 'normal', label: 'Regular (400)' },
+                                                            { val: '600', label: 'Semi Bold (600)' },
+                                                            { val: 'bold', label: 'Bold (700)' }
+                                                        ].map(w => (
+                                                            <button
+                                                                key={w.val}
+                                                                type="button"
+                                                                onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                                    ...prev,
+                                                                    name: { ...prev.name, fontWeight: w.val }
+                                                                }))}
+                                                                className={`flex-1 py-1 rounded text-[10px] font-bold cursor-pointer transition-all ${
+                                                                    normalizeFontWeight(previewLayout.name.fontWeight) === w.val
+                                                                        ? 'bg-amber-400 text-slate-950 shadow-xs'
+                                                                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {w.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
                                             </div>
                                         )}
 
@@ -6947,6 +7191,37 @@ export default function OrganizerCertificatesPage() {
                                                         onChange={(e) => handleUpdatePreviewLayout(prev => ({ ...prev, regNo: { ...prev.regNo, prefix: e.target.value } }))}
                                                         className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
                                                     />
+                                                </div>
+
+                                                {/* Font Weight (Product Sans) */}
+                                                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <label className="text-[10px] font-bold text-slate-400">Font Weight</label>
+                                                        <span className="text-[9px] bg-blue-950 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 font-bold">Product Sans</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        {[
+                                                            { val: 'normal', label: 'Regular (400)' },
+                                                            { val: '600', label: 'Semi Bold (600)' },
+                                                            { val: 'bold', label: 'Bold (700)' }
+                                                        ].map(w => (
+                                                            <button
+                                                                key={w.val}
+                                                                type="button"
+                                                                onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                                    ...prev,
+                                                                    regNo: { ...prev.regNo, fontWeight: w.val }
+                                                                }))}
+                                                                className={`flex-1 py-1 rounded text-[10px] font-bold cursor-pointer transition-all ${
+                                                                    normalizeFontWeight(previewLayout.regNo?.fontWeight) === w.val
+                                                                        ? 'bg-amber-400 text-slate-950 shadow-xs'
+                                                                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {w.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             </div>
                                         )}
@@ -7130,6 +7405,77 @@ export default function OrganizerCertificatesPage() {
                                                         className="w-full accent-purple-400 cursor-pointer"
                                                     />
                                                 </div>
+
+                                                {/* Text Alignment */}
+                                                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <label className="text-[10px] font-bold text-slate-400">Text Alignment</label>
+                                                        <span className="text-[9px] bg-emerald-950 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800 font-bold">Starts at X</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        {[
+                                                            { val: 'left', label: 'Left (Starts at X)' },
+                                                            { val: 'center', label: 'Center' },
+                                                            { val: 'right', label: 'Right' }
+                                                        ].map(a => (
+                                                            <button
+                                                                key={a.val}
+                                                                type="button"
+                                                                onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                                    ...prev,
+                                                                    credit: {
+                                                                        ...DEFAULT_CREDIT_LAYOUT,
+                                                                        ...(prev.credit || {}),
+                                                                        align: a.val as CanvasTextAlign,
+                                                                        explicitAlign: true
+                                                                    }
+                                                                }))}
+                                                                className={`flex-1 py-1 rounded text-[10px] font-bold cursor-pointer transition-all ${
+                                                                    (previewLayout.credit?.align || DEFAULT_CREDIT_LAYOUT.align) === a.val
+                                                                        ? 'bg-amber-400 text-slate-950 shadow-xs'
+                                                                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {a.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Font Weight (Product Sans) */}
+                                                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <label className="text-[10px] font-bold text-slate-400">Font Weight</label>
+                                                        <span className="text-[9px] bg-blue-950 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 font-bold">Product Sans</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        {[
+                                                            { val: 'normal', label: 'Regular (400)' },
+                                                            { val: '600', label: 'Semi Bold (600)' },
+                                                            { val: 'bold', label: 'Bold (700)' }
+                                                        ].map(w => (
+                                                            <button
+                                                                key={w.val}
+                                                                type="button"
+                                                                onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                                    ...prev,
+                                                                    credit: {
+                                                                        ...DEFAULT_CREDIT_LAYOUT,
+                                                                        ...(prev.credit || {}),
+                                                                        fontWeight: w.val
+                                                                    }
+                                                                }))}
+                                                                className={`flex-1 py-1 rounded text-[10px] font-bold cursor-pointer transition-all ${
+                                                                    normalizeFontWeight(previewLayout.credit?.fontWeight ?? DEFAULT_CREDIT_LAYOUT.fontWeight) === w.val
+                                                                        ? 'bg-amber-400 text-slate-950 shadow-xs'
+                                                                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {w.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
                                             </div>
                                         )}
 
@@ -7235,6 +7581,37 @@ export default function OrganizerCertificatesPage() {
                                                         onChange={(e) => handleUpdatePreviewLayout(prev => ({ ...prev, certId: { ...prev.certId, prefix: e.target.value } }))}
                                                         className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
                                                     />
+                                                </div>
+
+                                                {/* Font Weight (Product Sans) */}
+                                                <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <label className="text-[10px] font-bold text-slate-400">Font Weight</label>
+                                                        <span className="text-[9px] bg-blue-950 text-blue-300 px-1.5 py-0.5 rounded border border-blue-800 font-bold">Product Sans</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1">
+                                                        {[
+                                                            { val: 'normal', label: 'Regular (400)' },
+                                                            { val: '600', label: 'Semi Bold (600)' },
+                                                            { val: 'bold', label: 'Bold (700)' }
+                                                        ].map(w => (
+                                                            <button
+                                                                key={w.val}
+                                                                type="button"
+                                                                onClick={() => handleUpdatePreviewLayout(prev => ({
+                                                                    ...prev,
+                                                                    certId: { ...prev.certId, fontWeight: w.val }
+                                                                }))}
+                                                                className={`flex-1 py-1 rounded text-[10px] font-bold cursor-pointer transition-all ${
+                                                                    normalizeFontWeight(previewLayout.certId?.fontWeight) === w.val
+                                                                        ? 'bg-amber-400 text-slate-950 shadow-xs'
+                                                                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {w.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             </div>
                                         )}

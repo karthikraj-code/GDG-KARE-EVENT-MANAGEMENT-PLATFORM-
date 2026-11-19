@@ -19,6 +19,7 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://fonts.cdnfonts.com" />
         <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+        <link rel="stylesheet" href="https://fonts.cdnfonts.com/css/product-sans" />
         <link rel="stylesheet" href="https://fonts.cdnfonts.com/css/google-sans" />
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/mortezaom/google-sans-cdn@master/fonts.css" />
       </head>
