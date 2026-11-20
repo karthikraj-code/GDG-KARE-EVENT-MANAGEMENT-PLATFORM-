@@ -29,6 +29,7 @@ import {
     Move,
     GripVertical,
     AlignCenter,
+    RotateCcw,
     Users,
     Trophy,
     X,
@@ -323,7 +324,12 @@ export const normalizeLayoutConfig = (raw: any): LayoutConfig => {
         },
         qrCode: {
             ...DEFAULT_LAYOUT.qrCode,
-            ...(raw.qrCode || {})
+            ...(raw.qrCode || {}),
+            x: Number.isFinite(Number(raw.qrCode?.x)) ? Number(raw.qrCode.x) : DEFAULT_LAYOUT.qrCode.x,
+            y: Number.isFinite(Number(raw.qrCode?.y)) ? Number(raw.qrCode.y) : DEFAULT_LAYOUT.qrCode.y,
+            size: Number.isFinite(Number(raw.qrCode?.size)) && Number(raw.qrCode.size) > 20
+                ? Number(raw.qrCode.size)
+                : DEFAULT_LAYOUT.qrCode.size
         },
         credit: {
             ...DEFAULT_CREDIT_LAYOUT,
@@ -335,6 +341,160 @@ export const normalizeLayoutConfig = (raw: any): LayoutConfig => {
             fontWeight: normalizeFontWeight(raw.credit?.fontWeight || DEFAULT_CREDIT_LAYOUT.fontWeight)
         }
     }
+}
+
+export const getLineCenterCoordinates = (dims: { width: number; height: number }) => {
+    const w = dims.width || 1920
+    const h = dims.height || 1080
+
+    // Winner 1, 2, 3 (7016x4960) - Google line width: 3801, startX: 2366, halfWidth: 1901 -> Center X: 4267
+    if (w > 5000) {
+        return { x: 4267, y: 2635, fontSize: 250 }
+    }
+    // Participation (2037x1440) - Google line width: 1102, startX: 688, halfWidth: 551 -> Center X: 1239
+    if (w > 2000 && w < 2200) {
+        return { x: 1239, y: 765, fontSize: 72 }
+    }
+    // Standard (1920x1080) - Center X: 1168 (ratio 0.6082)
+    if (w >= 1800 && w <= 2000) {
+        return { x: 1168, y: 574, fontSize: 56 }
+    }
+    return {
+        x: Math.round(w * 0.6082),
+        y: Math.round(h * 0.531),
+        fontSize: Math.round(w * 0.035)
+    }
+}
+
+export const autoAlignCoordinates = (
+    rawLayout: any,
+    dims: { width: number; height: number }
+): LayoutConfig => {
+    const layout = normalizeLayoutConfig(rawLayout)
+    const w = dims.width || 1920
+    const h = dims.height || 1080
+
+    // Detect if coordinates were saved on a 7016x4960 canvas while current template is ~2037x1440 or 1920x1080
+    if (layout.name.x > w || layout.name.y > h || (layout.name.x > 3000 && w < 2500)) {
+        const sourceW = 7016
+        const sourceH = 4960
+        const scaleX = w / sourceW
+        const scaleY = h / sourceH
+
+        return {
+            ...layout,
+            name: {
+                ...layout.name,
+                x: Math.round(layout.name.x * scaleX),
+                y: Math.round(layout.name.y * scaleY),
+                fontSize: Math.max(28, Math.round((layout.name.fontSize || 250) * scaleX)),
+                align: 'center'
+            },
+            regNo: {
+                ...layout.regNo,
+                x: Math.round(layout.regNo.x * scaleX),
+                y: Math.round(layout.regNo.y * scaleY),
+                fontSize: Math.max(14, Math.round((layout.regNo.fontSize || 100) * scaleX))
+            },
+            credit: {
+                ...DEFAULT_CREDIT_LAYOUT,
+                ...(layout.credit || {}),
+                x: Math.round((layout.credit?.x || 4580) * scaleX),
+                y: Math.round((layout.credit?.y || 3840) * scaleY),
+                fontSize: Math.max(14, Math.round((layout.credit?.fontSize || 110) * scaleX)),
+                align: 'left' as CanvasTextAlign,
+                fontWeight: normalizeFontWeight(layout.credit?.fontWeight || DEFAULT_CREDIT_LAYOUT.fontWeight)
+            },
+            certId: {
+                ...layout.certId,
+                x: Math.round(layout.certId.x * scaleX),
+                y: Math.round(layout.certId.y * scaleY),
+                fontSize: Math.max(12, Math.round((layout.certId.fontSize || 55) * scaleX))
+            },
+            qrCode: {
+                ...layout.qrCode,
+                x: Math.round(layout.qrCode.x * scaleX),
+                y: Math.round(layout.qrCode.y * scaleY),
+                size: Math.max(80, Math.round((Number(layout.qrCode.size) || 150) * scaleX))
+            }
+        }
+    }
+
+    return layout
+}
+
+export async function optimizeCertificateTemplate(
+    source: File | string
+): Promise<{ dataUrl: string; width: number; height: number }> {
+    return new Promise((resolve, reject) => {
+        let objectUrl = ''
+        const img = new Image()
+        img.onload = () => {
+            try {
+                if (objectUrl) URL.revokeObjectURL(objectUrl)
+                let targetWidth = img.naturalWidth || 1920
+                let targetHeight = img.naturalHeight || 1080
+
+                // Max resolution caps (2560x1440 for high-def crispness while keeping payload < 1MB)
+                const MAX_W = 2560
+                const MAX_H = 1440
+                if (targetWidth > MAX_W || targetHeight > MAX_H) {
+                    const ratio = Math.min(MAX_W / targetWidth, MAX_H / targetHeight)
+                    targetWidth = Math.round(targetWidth * ratio)
+                    targetHeight = Math.round(targetHeight * ratio)
+                }
+
+                const canvas = document.createElement('canvas')
+                canvas.width = targetWidth
+                canvas.height = targetHeight
+                const ctx = canvas.getContext('2d')
+                if (!ctx) {
+                    throw new Error('Canvas 2D context not available')
+                }
+
+                ctx.imageSmoothingEnabled = true
+                ctx.imageSmoothingQuality = 'high'
+                ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+
+                let dataUrl = ''
+                try {
+                    dataUrl = canvas.toDataURL('image/webp', 0.92)
+                    if (!dataUrl.startsWith('data:image/webp') && dataUrl.length > 2_500_000) {
+                        dataUrl = canvas.toDataURL('image/jpeg', 0.90)
+                    }
+                } catch {
+                    dataUrl = canvas.toDataURL('image/jpeg', 0.90)
+                }
+
+                if (dataUrl.length > 2_500_000) {
+                    try {
+                        dataUrl = canvas.toDataURL('image/webp', 0.84)
+                    } catch {
+                        dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+                    }
+                }
+
+                resolve({
+                    dataUrl,
+                    width: targetWidth,
+                    height: targetHeight
+                })
+            } catch (err) {
+                reject(err)
+            }
+        }
+        img.onerror = (e) => {
+            if (objectUrl) URL.revokeObjectURL(objectUrl)
+            reject(new Error('Failed to load image: ' + String(e)))
+        }
+
+        if (typeof source === 'string') {
+            img.src = source
+        } else {
+            objectUrl = URL.createObjectURL(source)
+            img.src = objectUrl
+        }
+    })
 }
 
 export const DEFAULT_CREDIT_LAYOUT = {
@@ -896,19 +1056,30 @@ export default function OrganizerCertificatesPage() {
         return () => observer.disconnect()
     }, [])
 
-    // Generate sample QR code data URL for preview
+    // Generate sample QR code data URL for preview (memory-safe fixed 200px thumbnail)
     useEffect(() => {
+        let isMounted = true
         const origin = typeof window !== 'undefined' ? window.location.origin : ''
         const sampleUrl = `${origin}/verify-certificate?id=GDG-KARE-PREV-99A1`
         QRCode.toDataURL(sampleUrl, {
-            width: layout.qrCode.size || 150,
+            width: 200,
             margin: 1,
             color: {
-                dark: layout.qrCode.darkColor || '#000000',
-                light: layout.qrCode.lightColor || '#ffffff'
+                dark: layout.qrCode?.darkColor || '#000000',
+                light: layout.qrCode?.lightColor || '#ffffff'
             }
-        }).then(url => setSampleQrDataUrl(url)).catch(err => console.error(err))
-    }, [layout.qrCode.darkColor, layout.qrCode.lightColor, layout.qrCode.size])
+        })
+            .then(url => {
+                if (isMounted) setSampleQrDataUrl(url)
+            })
+            .catch(err => {
+                console.warn('Preview QR code generation note:', err)
+            })
+
+        return () => {
+            isMounted = false
+        }
+    }, [layout.qrCode?.darkColor, layout.qrCode?.lightColor])
 
     // Global pointer move & up listeners for smooth dragging
     useEffect(() => {
@@ -1099,6 +1270,19 @@ export default function OrganizerCertificatesPage() {
             const code = String(p.certificate_code)
             certCodeCacheRef.current.set(specificKey, code)
             return code
+        }
+
+        // Check if participant belongs to Non CGPA Group 3 (their cert id is S.no-GDG-KARE)
+        const isGroup3 = p.category === 'Group 3' || determineCategoryByYear(p.year) === 'Group 3'
+        if (isGroup3) {
+            const g3List = participants.filter(item => item.category === 'Group 3' || determineCategoryByYear(item.year) === 'Group 3')
+            const g3Idx = g3List.findIndex(item => (cleanReg && (item.reg_no || '').trim().toLowerCase() === cleanReg) || (cleanId && item.id === p.id))
+            if (g3Idx >= 0) {
+                const group3Code = `${g3Idx + 1}-GDG-KARE`
+                certCodeCacheRef.current.set(specificKey, group3Code)
+                certCodeCacheRef.current.set(generalKey, group3Code)
+                return group3Code
+            }
         }
 
         // 5. Deterministic Algorithmic Fallback:
@@ -1561,22 +1745,38 @@ export default function OrganizerCertificatesPage() {
             for (const key of Object.keys(loadedStore)) {
                 const item = loadedStore[key]
                 if (item && item.imageDataUrl && item.imageDataUrl.startsWith('data:image')) {
-                    fetch('/api/organizer/certificate-templates', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            tier: key,
-                            fileName: item.fileName,
-                            imageDataUrl: item.imageDataUrl,
-                            dimensions: item.dimensions,
-                            layout: item.layout
-                        })
-                    }).then(r => r.json()).then(resJson => {
-                        if (resJson.template?.image_data_url) {
-                            item.imageDataUrl = resJson.template.image_data_url
-                            saveTemplateToIndexedDb(key, item)
+                    (async () => {
+                        try {
+                            const rawDataUrl = item.imageDataUrl
+                            if (!rawDataUrl) return
+                            let uploadDataUrl: string = rawDataUrl
+                            if (uploadDataUrl.length > 2_000_000) {
+                                const opt = await optimizeCertificateTemplate(uploadDataUrl)
+                                uploadDataUrl = opt.dataUrl
+                                item.imageDataUrl = opt.dataUrl
+                                item.dimensions = { width: opt.width, height: opt.height }
+                                await saveTemplateToIndexedDb(key, item)
+                            }
+                            const res = await fetch('/api/organizer/certificate-templates', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    tier: key,
+                                    fileName: item.fileName,
+                                    imageDataUrl: uploadDataUrl,
+                                    dimensions: item.dimensions,
+                                    layout: item.layout
+                                })
+                            })
+                            const resJson = await res.json()
+                            if (resJson.template?.image_data_url) {
+                                item.imageDataUrl = resJson.template.image_data_url
+                                await saveTemplateToIndexedDb(key, item)
+                            }
+                        } catch (err) {
+                            console.warn('Background template sync error:', err)
                         }
-                    }).catch(() => { })
+                    })()
                 }
             }
 
@@ -1593,7 +1793,8 @@ export default function OrganizerCertificatesPage() {
                     setTemplateImage(img)
                     setTemplateDimensions(participationData.dimensions || { width: img.naturalWidth, height: img.naturalHeight })
                     setTemplateFileName(participationData.fileName || 'Participation Template')
-                    if (participationData.layout) setLayout(normalizeLayoutConfig(participationData.layout))
+                    const dims = participationData.dimensions || { width: img.naturalWidth, height: img.naturalHeight }
+                    if (participationData.layout) setLayout(autoAlignCoordinates(participationData.layout, dims))
                 }
                 img.src = participationData.imageDataUrl
                 return
@@ -1810,24 +2011,44 @@ export default function OrganizerCertificatesPage() {
     // 2. TEMPLATE IMAGE HANDLING
     // =========================================================================
 
-    const handleTemplateUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
         if (!file) return
 
+        showToast('info', 'Optimizing and syncing certificate template...')
         setTemplateFileName(file.name)
-        const reader = new FileReader()
-        reader.onload = async (evt) => {
-            const dataUrl = evt.target?.result as string
+
+        try {
+            // High-speed client-side optimization: scales massive 4K/15MB files to high-def WebP (< 800KB)
+            // Completely eliminates Vercel 4.5MB serverless function body size limit errors (HTTP 413)
+            const { dataUrl, width, height } = await optimizeCertificateTemplate(file)
+
             const img = new Image()
             img.onload = async () => {
                 setTemplateImage(img)
-                setTemplateDimensions({ width: img.naturalWidth, height: img.naturalHeight })
+                setTemplateDimensions({ width, height })
+
+                // Automatically pull calibrated coordinates from Supabase DB for this tier
+                let activeLayout = layout
+                try {
+                    const res = await fetch('/api/organizer/certificate-templates')
+                    const data = await res.json()
+                    if (data.templates && Array.isArray(data.templates)) {
+                        const match = data.templates.find((t: any) => t.tier === selectedCertType) || data.templates.find((t: any) => t.tier === 'Participation')
+                        if (match && match.layout && Object.keys(match.layout).length > 0) {
+                            activeLayout = normalizeLayoutConfig(match.layout)
+                            setLayout(activeLayout)
+                        }
+                    }
+                } catch (pullErr) {
+                    console.warn('Could not pull DB coordinates during template upload:', pullErr)
+                }
 
                 const tierData: TierTemplateData = {
                     imageDataUrl: dataUrl,
                     fileName: file.name,
-                    dimensions: { width: img.naturalWidth, height: img.naturalHeight },
-                    layout: layout
+                    dimensions: { width, height },
+                    layout: activeLayout
                 }
 
                 setTemplateStore(prev => ({
@@ -1848,7 +2069,7 @@ export default function OrganizerCertificatesPage() {
                             tier: selectedCertType,
                             fileName: file.name,
                             imageDataUrl: dataUrl,
-                            dimensions: { width: img.naturalWidth, height: img.naturalHeight },
+                            dimensions: { width, height },
                             layout: layout
                         })
                     })
@@ -1876,8 +2097,8 @@ export default function OrganizerCertificatesPage() {
                     title: `🖼️ "${selectedCertType}" Template Uploaded & Synced!`,
                     message: `Template image "${file.name}" has been stored in Supabase Cloud Storage and cached locally.`,
                     details: [
-                        `📁 File Name: ${file.name}`,
-                        `📐 Dimensions: ${img.naturalWidth} × ${img.naturalHeight} px`,
+                        `📁 File Name: ${file.name} (${Math.round(file.size / 1024)} KB raw -> ${Math.round(dataUrl.length * 0.75 / 1024)} KB optimized)`,
+                        `📐 Dimensions: ${width} × ${height} px`,
                         `🏆 Certificate Tier: ${selectedCertType}`,
                         `☁️ Production Cloud Storage: ${cloudSynced ? 'Hosted on Supabase CDN storage. All organizers across all devices can see this template.' : 'Cached locally in IndexedDB & queued for cloud sync.'}`,
                         `💾 Local Cache: Instant load across browser refreshes.`
@@ -1888,8 +2109,10 @@ export default function OrganizerCertificatesPage() {
                 showToast('success', `Template uploaded for "${selectedCertType}": Synced to Cloud & cached!`)
             }
             img.src = dataUrl
+        } catch (err: any) {
+            console.error('Template upload error:', err)
+            showToast('error', 'Failed to process template image: ' + (err.message || 'Unknown error'))
         }
-        reader.readAsDataURL(file)
     }
 
     // Switch between certificate types (Participation, Winner 1, Winner 2, Winner 3, etc.)
@@ -1936,7 +2159,8 @@ export default function OrganizerCertificatesPage() {
                 setTemplateImage(img)
                 setTemplateDimensions(targetData.dimensions || { width: img.naturalWidth, height: img.naturalHeight })
                 setTemplateFileName(targetData.fileName || `${newType} Template`)
-                if (targetData.layout) setLayout(normalizeLayoutConfig(targetData.layout))
+                const dims = targetData.dimensions || { width: img.naturalWidth, height: img.naturalHeight }
+                if (targetData.layout) setLayout(autoAlignCoordinates(targetData.layout, dims))
                 showToast('success', `Switched to ${newType}. Loaded custom template.`)
             }
             img.src = targetData.imageDataUrl
@@ -2100,6 +2324,30 @@ export default function OrganizerCertificatesPage() {
         setActiveElementToPosition(null)
     }
 
+    // Pull saved coordinates for a tier from Supabase Database
+    const pullCoordinatesFromDb = async (tier: CertificateType = selectedCertType) => {
+        try {
+            showToast('info', `Pulling saved coordinates for "${tier}" from database...`)
+            const res = await fetch('/api/organizer/certificate-templates')
+            const data = await res.json()
+            if (data.templates && Array.isArray(data.templates)) {
+                const match = data.templates.find((t: any) => t.tier === tier) || data.templates.find((t: any) => t.tier === 'Participation')
+                if (match && match.layout && Object.keys(match.layout).length > 0) {
+                    const dims = match.dimensions || templateDimensions
+                    const normalized = autoAlignCoordinates(match.layout, dims)
+                    setLayout(normalized)
+                    showToast('success', `Pulled calibrated coordinates for "${tier}" from database!`)
+                    return normalized
+                }
+            }
+            showToast('info', `No saved coordinates found in database for "${tier}". Keeping active layout.`)
+        } catch (err: any) {
+            console.error('Error pulling coordinates from DB:', err)
+            showToast('error', 'Failed to pull coordinates from database.')
+        }
+        return null
+    }
+
     const saveLayoutConfig = async () => {
         setSavingTemplate(true)
         try {
@@ -2122,13 +2370,18 @@ export default function OrganizerCertificatesPage() {
             // Save coordinates to Supabase Cloud database so ALL organizers in production see them
             let cloudSynced = false
             try {
+                let imagePayload = updatedTierData.imageDataUrl || ''
+                if (imagePayload.startsWith('data:') && imagePayload.length > 2_000_000) {
+                    imagePayload = ''
+                }
+
                 const cloudRes = await fetch('/api/organizer/certificate-templates', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         tier: selectedCertType,
                         fileName: updatedTierData.fileName,
-                        imageDataUrl: updatedTierData.imageDataUrl || '',
+                        imageDataUrl: imagePayload,
                         dimensions: updatedTierData.dimensions,
                         layout: layout
                     })
@@ -2340,26 +2593,21 @@ export default function OrganizerCertificatesPage() {
                     ctx.fillText(`${layout.certId.prefix}${certCode}`, layout.certId.x, layout.certId.y)
                 }
 
-                // 5. Draw QR Code
+                // 5. Draw QR Code directly to canvas
                 if (layout.qrCode.enabled !== false) {
-                    const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
-                        width: layout.qrCode.size,
+                    const qrCanvas = document.createElement('canvas')
+                    const qrRenderSize = Math.min(480, Math.max(160, Number(layout.qrCode.size) || 220))
+                    await QRCode.toCanvas(qrCanvas, verifyUrl, {
+                        width: qrRenderSize,
                         margin: 1,
                         color: {
                             dark: layout.qrCode.darkColor || '#000000',
                             light: layout.qrCode.lightColor || '#ffffff'
                         }
                     })
-
-                    await new Promise<void>((resolve) => {
-                        const qrImg = new Image()
-                        qrImg.onload = () => {
-                            ctx.drawImage(qrImg, layout.qrCode.x, layout.qrCode.y, layout.qrCode.size, layout.qrCode.size)
-                            resolve()
-                        }
-                        qrImg.onerror = () => resolve()
-                        qrImg.src = qrDataUrl
-                    })
+                    ctx.drawImage(qrCanvas, layout.qrCode.x, layout.qrCode.y, layout.qrCode.size, layout.qrCode.size)
+                    qrCanvas.width = 0
+                    qrCanvas.height = 0
                 }
 
                 const dataUrl = offscreenCanvas.toDataURL('image/png', 0.95)
@@ -2643,8 +2891,9 @@ export default function OrganizerCertificatesPage() {
                 // 5. QR Code - DIRECT TO CANVAS (Super-fast, no base64 string, no image onload!)
                 if (tLayout.qrCode.enabled !== false) {
                     const qrCanvas = document.createElement('canvas')
+                    const qrRenderSize = Math.min(480, Math.max(160, Number(tLayout.qrCode.size) || 220))
                     await QRCode.toCanvas(qrCanvas, verifyUrl, {
-                        width: tLayout.qrCode.size,
+                        width: qrRenderSize,
                         margin: 1,
                         color: {
                             dark: tLayout.qrCode.darkColor || '#000000',
@@ -2652,6 +2901,8 @@ export default function OrganizerCertificatesPage() {
                         }
                     })
                     ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+                    qrCanvas.width = 0
+                    qrCanvas.height = 0
                 }
 
                 // Lightweight JPEG dataURL for instant state storage without RAM bloat
@@ -2861,8 +3112,9 @@ export default function OrganizerCertificatesPage() {
         // 5. QR Code directly via QRCode.toCanvas (No slow base64 Image onload delays!)
         if (tLayout.qrCode.enabled !== false) {
             const qrCanvas = document.createElement('canvas')
+            const qrRenderSize = Math.min(480, Math.max(160, Number(tLayout.qrCode.size) || 220))
             await QRCode.toCanvas(qrCanvas, verifyUrl, {
-                width: tLayout.qrCode.size,
+                width: qrRenderSize,
                 margin: 1,
                 color: {
                     dark: tLayout.qrCode.darkColor || '#000000',
@@ -2870,6 +3122,8 @@ export default function OrganizerCertificatesPage() {
                 }
             })
             ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+            qrCanvas.width = 0
+            qrCanvas.height = 0
         }
 
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
@@ -3050,8 +3304,9 @@ export default function OrganizerCertificatesPage() {
         // QR Code
         if (tLayout.qrCode.enabled !== false) {
             const qrCanvas = document.createElement('canvas')
+            const qrRenderSize = Math.min(480, Math.max(160, Number(tLayout.qrCode.size) || 220))
             await QRCode.toCanvas(qrCanvas, verifyUrl, {
-                width: tLayout.qrCode.size,
+                width: qrRenderSize,
                 margin: 1,
                 color: {
                     dark: tLayout.qrCode.darkColor || '#000000',
@@ -3059,6 +3314,8 @@ export default function OrganizerCertificatesPage() {
                 }
             })
             ctx.drawImage(qrCanvas, tLayout.qrCode.x, tLayout.qrCode.y, tLayout.qrCode.size, tLayout.qrCode.size)
+            qrCanvas.width = 0
+            qrCanvas.height = 0
         }
 
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
@@ -3201,13 +3458,18 @@ export default function OrganizerCertificatesPage() {
             await saveTemplateToIndexedDb(activeTier, updatedTierData)
 
             // 3. Persist to Supabase Cloud Database table & storage
+            let imagePayload = updatedTierData.imageDataUrl || ''
+            if (imagePayload.startsWith('data:') && imagePayload.length > 2_000_000) {
+                imagePayload = ''
+            }
+
             const res = await fetch('/api/organizer/certificate-templates', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     tier: activeTier,
                     fileName: updatedTierData.fileName,
-                    imageDataUrl: updatedTierData.imageDataUrl || '',
+                    imageDataUrl: imagePayload,
                     dimensions: updatedTierData.dimensions,
                     layout: previewLayout
                 })
@@ -3437,6 +3699,74 @@ export default function OrganizerCertificatesPage() {
         } finally {
             setDownloadingCategory(false)
             setDownloadProgress(prev => ({ ...prev, isOpen: false }))
+        }
+    }
+
+    // High-performance Step 1 Participant & Certificate ID Excel Downloader
+    const downloadStep1Excel = (subset?: ParticipantRecord[]) => {
+        const targets = subset || (filteredParticipants.filter(p => p.selected).length > 0
+            ? filteredParticipants.filter(p => p.selected)
+            : filteredParticipants)
+
+        if (targets.length === 0) {
+            showToast('error', 'No participants available to download.')
+            return
+        }
+
+        try {
+            const origin = typeof window !== 'undefined' ? window.location.origin : ''
+            const excelRows = targets.map((p, idx) => {
+                const sNo = idx + 1
+                const pTier = getParticipantAwardTier(p)
+                const certCode = getExistingOrNewCertCode(p, pTier)
+                const creditLayout = { ...DEFAULT_CREDIT_LAYOUT, ...(layout.credit || {}) }
+                const creditText = getParticipantCreditText(p, creditLayout) || (p.category === 'Group 3' || determineCategoryByYear(p.year) === 'Group 3' ? 'Non CGPA - Group 3' : '2 EE credits')
+
+                return {
+                    'S.No': sNo,
+                    'Certificate ID': certCode,
+                    'Student Name': p.name,
+                    'Registration No': p.reg_no || '—',
+                    'Department': p.dept || 'Engineering',
+                    'Section': p.section || '—',
+                    'Year': p.year || '—',
+                    'Credit / Track': creditText,
+                    'Category': p.category || 'Group 3',
+                    'Team Name': p.team_name || '—',
+                    'Email': p.email || '—',
+                    'Assigned Award Tier': pTier,
+                    'Verification Link': `${origin}/verify-certificate?id=${encodeURIComponent(certCode)}`
+                }
+            })
+
+            const worksheet = XLSX.utils.json_to_sheet(excelRows)
+            worksheet['!cols'] = [
+                { wch: 8 },  // S.No
+                { wch: 20 }, // Certificate ID
+                { wch: 32 }, // Student Name
+                { wch: 18 }, // Registration No
+                { wch: 18 }, // Department
+                { wch: 10 }, // Section
+                { wch: 14 }, // Year
+                { wch: 24 }, // Credit / Track
+                { wch: 16 }, // Category
+                { wch: 24 }, // Team Name
+                { wch: 32 }, // Email
+                { wch: 20 }, // Assigned Award Tier
+                { wch: 55 }  // Verification Link
+            ]
+
+            const workbook = XLSX.utils.book_new()
+            const activeFilterLabel = categoryFilter === 'All' ? 'All_Participants' : categoryFilter.replace(/\s+/g, '_')
+            XLSX.utils.book_append_sheet(workbook, worksheet, activeFilterLabel.substring(0, 31))
+
+            const cleanEventName = (activeEventName || 'Event').replace(/[\\/?*[:"<>|\s]/g, '_')
+            const fileName = `${cleanEventName}_${activeFilterLabel}_Certificates_List.xlsx`
+            XLSX.writeFile(workbook, fileName)
+            showToast('success', `Exported ${targets.length} participants with S.No & Cert IDs to Excel (${fileName})!`)
+        } catch (err: any) {
+            console.error('Failed to export Excel:', err)
+            showToast('error', `Failed to generate Excel file: ${err.message || 'Unknown error'}`)
         }
     }
 
@@ -3933,31 +4263,11 @@ export default function OrganizerCertificatesPage() {
                     </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
-                    <div className="flex items-center gap-1.5 bg-gray-100 p-1 rounded-2xl border border-gray-200/80">
-                        <button
-                            type="button"
-                            onClick={switchToDbMode}
-                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${dataSource === 'db'
-                                ? 'bg-slate-900 text-white shadow-md'
-                                : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
-                                }`}
-                        >
-                            <Database size={14} />
-                            <span>Generate Certificates from DB</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={switchToExcelMode}
-                            className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${dataSource === 'excel'
-                                ? 'bg-slate-900 text-white shadow-md'
-                                : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
-                                }`}
-                        >
-                            <FileSpreadsheet size={14} />
-                            <span>Generate Certificates from Excel Sheet</span>
-                        </button>
-                    </div>
+                <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold shadow-xs">
+                        <Database size={13} className="text-emerald-600" />
+                        <span>Database Participants</span>
+                    </span>
                 </div>
             </div>
 
@@ -4105,12 +4415,7 @@ export default function OrganizerCertificatesPage() {
                                         <CheckCircle2 size={16} className={savingWinningTeams ? 'animate-spin' : ''} />
                                         <span>{savingWinningTeams ? 'Saving to Database...' : '💾 Save Winning Teams to DB'}</span>
                                     </button>
-                                ) : (
-                                    <div className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold">
-                                        <FileSpreadsheet size={14} className="text-emerald-600" />
-                                        <span>Excel Sheet Winners (Session)</span>
-                                    </div>
-                                )}
+                                ) : null}
                             </div>
                         </div>
 
@@ -4433,45 +4738,30 @@ export default function OrganizerCertificatesPage() {
                                         Step 1
                                     </span>
                                     <span className="text-xs text-gray-400">
-                                        {dataSource === 'db' ? 'Platform Database' : 'Excel / CSV Spreadsheet'}
+                                        Platform Database
                                     </span>
                                 </div>
                                 <h2 className="text-base font-bold text-gray-900 mt-1">
-                                    {dataSource === 'db' ? 'Participants from GDG-KARE Database' : 'Participants from Uploaded Excel / CSV Sheet'}
+                                    Participants from GDG-KARE Database
                                 </h2>
                                 <p className="text-xs text-gray-500 mt-0.5">
-                                    {dataSource === 'db'
-                                        ? 'Loaded directly from official platform registrations & teams.'
-                                        : excelFileName
-                                            ? `File loaded: ${excelFileName} (${participants.length} students)`
-                                            : 'Upload an Excel (.xlsx, .xls, .csv) spreadsheet to issue custom certificates.'}
+                                    Loaded directly from official platform registrations &amp; teams ({participants.length} students).
                                 </p>
                             </div>
 
                             <div className="flex items-center gap-2">
-                                {dataSource === 'db' ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            fetchDbParticipants()
-                                            syncWinningTeamsFromDb()
-                                        }}
-                                        disabled={loadingParticipants}
-                                        className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                                    >
-                                        <RefreshCw size={13} className={loadingParticipants ? 'animate-spin' : ''} />
-                                        <span>Reload Database</span>
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => excelInputRef.current?.click()}
-                                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-                                    >
-                                        <Upload size={13} />
-                                        <span>{excelFileName ? 'Replace or add new Excel File' : 'Upload Excel / CSV'}</span>
-                                    </button>
-                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        fetchDbParticipants()
+                                        syncWinningTeamsFromDb()
+                                    }}
+                                    disabled={loadingParticipants}
+                                    className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                                >
+                                    <RefreshCw size={13} className={loadingParticipants ? 'animate-spin' : ''} />
+                                    <span>Reload Database</span>
+                                </button>
                             </div>
                         </div>
 
@@ -4580,60 +4870,7 @@ export default function OrganizerCertificatesPage() {
                             </div>
                         )}
 
-                        {/* Event Name Text Input for Excel Mode */}
-                        {dataSource === 'excel' && (
-                            <div className="bg-emerald-50/50 border border-emerald-200/90 rounded-xl p-4 space-y-2">
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                    <label htmlFor="excel-event-name-input" className="text-xs font-bold text-gray-900 flex items-center gap-2">
-                                        <span className="w-6 h-6 rounded-md bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                                            <Trophy size={13} />
-                                        </span>
-                                        <span>Event Name for this Spreadsheet:</span>
-                                    </label>
-                                    <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-full self-start sm:self-auto">
-                                        ● Embeds in QR Code & Displayed on Scanner
-                                    </span>
-                                </div>
-                                <div className="relative">
-                                    <input
-                                        id="excel-event-name-input"
-                                        type="text"
-                                        value={excelEventName}
-                                        onChange={(e) => handleExcelEventNameChange(e.target.value)}
-                                        onBlur={handleExcelEventNameBlur}
-                                        placeholder="Enter Event Name (e.g., HackKare 2026, AI & ML Bootcamp, Web3 Summit...)"
-                                        className="w-full px-3.5 py-2.5 bg-white border border-emerald-300 rounded-xl text-xs font-bold text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-emerald-500 focus:outline-none shadow-xs"
-                                    />
-                                </div>
-                                <p className="text-[11px] text-gray-500">
-                                    This event name will be cryptographically signed into every certificate&apos;s QR code and displayed to anyone who verifies or scans the certificate.
-                                </p>
-                            </div>
-                        )}
 
-                        {/* If Excel mode and no participants loaded yet, display prominent upload dropzone */}
-                        {dataSource === 'excel' && participants.length === 0 && (
-                            <div
-                                onClick={() => excelInputRef.current?.click()}
-                                className="border-2 border-dashed border-gray-300 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/40 rounded-2xl p-8 text-center cursor-pointer transition-all space-y-3"
-                            >
-                                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto font-bold">
-                                    <FileSpreadsheet size={24} />
-                                </div>
-                                <div>
-                                    <h3 className="text-sm font-bold text-gray-900">Choose your Excel or CSV Spreadsheet</h3>
-                                    <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-                                        Columns supported: <strong>Name, Reg No, Department, Section, Year, Team Name, Category</strong>.
-                                    </p>
-                                </div>
-                                <button
-                                    type="button"
-                                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm pointer-events-none"
-                                >
-                                    Browse Spreadsheet File (.xlsx, .xls, .csv)
-                                </button>
-                            </div>
-                        )}
 
                         {/* Category & Team Filter & Selection Tools */}
                         <div className="flex flex-wrap items-center justify-between gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-gray-200">
@@ -4742,6 +4979,17 @@ export default function OrganizerCertificatesPage() {
                                 )}
                                 <button
                                     type="button"
+                                    id="step1-download-excel-btn"
+                                    onClick={() => downloadStep1Excel()}
+                                    disabled={filteredParticipants.length === 0}
+                                    className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg font-bold flex items-center gap-1.5 shadow-sm transition-all text-xs cursor-pointer"
+                                    title="Download participant details with S.No and Certificate IDs as Excel spreadsheet"
+                                >
+                                    <FileSpreadsheet size={13} />
+                                    <span>Download Excel ({filteredParticipants.filter(p => p.selected).length > 0 ? filteredParticipants.filter(p => p.selected).length : filteredParticipants.length})</span>
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => toggleSelectAll(true)}
                                     className="text-gray-600 hover:text-gray-900 font-semibold flex items-center gap-1"
                                 >
@@ -4775,11 +5023,13 @@ export default function OrganizerCertificatesPage() {
 
                             <div className="border border-gray-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto">
                                 <table className="w-full text-left text-xs">
-                                    <thead className="bg-slate-100/80 sticky top-0 border-b border-gray-200 text-gray-600 font-bold uppercase text-[10px]">
+                                    <thead className="bg-slate-100 sticky top-0 z-10 border-b border-gray-200 text-gray-600 font-bold uppercase text-[10px]">
                                         <tr>
-                                            <th className="py-2.5 px-3 w-10">Include</th>
+                                            <th className="py-2.5 px-3 w-10 text-center">Include</th>
+                                            <th className="py-2.5 px-2 w-12 text-center">S.No</th>
                                             <th className="py-2.5 px-3">Student Name</th>
                                             <th className="py-2.5 px-3">Reg No</th>
+                                            <th className="py-2.5 px-3">Cert ID</th>
                                             <th className="py-2.5 px-3">Team</th>
                                             <th className="py-2.5 px-3">Dept & Cohort</th>
                                             <th className="py-2.5 px-3">Category</th>
@@ -4789,7 +5039,7 @@ export default function OrganizerCertificatesPage() {
                                     <tbody className="divide-y divide-gray-100">
                                         {loadingParticipants && participants.length === 0 ? (
                                             <tr>
-                                                <td colSpan={7} className="py-8 text-center text-gray-500">
+                                                <td colSpan={9} className="py-8 text-center text-gray-500">
                                                     <div className="flex flex-col items-center justify-center gap-2">
                                                         <RefreshCw size={18} className="animate-spin text-emerald-600" />
                                                         <span className="text-xs font-semibold">Loading participants from database...</span>
@@ -4798,7 +5048,7 @@ export default function OrganizerCertificatesPage() {
                                             </tr>
                                         ) : filteredParticipants.length === 0 ? (
                                             <tr>
-                                                <td colSpan={7} className="py-8 text-center text-gray-500">
+                                                <td colSpan={9} className="py-8 text-center text-gray-500">
                                                     {participants.length === 0 ? (
                                                         <div className="flex flex-col items-center justify-center gap-2">
                                                             <Database size={22} className="text-gray-400" />
@@ -4856,7 +5106,7 @@ export default function OrganizerCertificatesPage() {
                                                 const isWinner = awardTier.startsWith('Winner')
                                                 return (
                                                     <tr key={p.id} className={`hover:bg-slate-50 ${p.selected ? 'bg-emerald-50/20' : 'opacity-60'}`}>
-                                                        <td className="py-2 px-3">
+                                                        <td className="py-2 px-3 text-center">
                                                             <input
                                                                 type="checkbox"
                                                                 checked={p.selected}
@@ -4867,8 +5117,16 @@ export default function OrganizerCertificatesPage() {
                                                                 className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                                                             />
                                                         </td>
+                                                        <td className="py-2 px-2 text-center font-mono font-bold text-slate-500 text-[11px]">
+                                                            {idx + 1}
+                                                        </td>
                                                         <td className="py-2 px-3 font-semibold text-gray-900">{p.name}</td>
                                                         <td className="py-2 px-3 font-mono font-bold text-gray-700">{p.reg_no || <span className="text-amber-500 italic">Missing</span>}</td>
+                                                        <td className="py-2 px-3 font-mono text-[11px]">
+                                                            <span className="px-2 py-0.5 rounded font-bold bg-amber-50 text-amber-900 border border-amber-200">
+                                                                {getExistingOrNewCertCode(p, awardTier)}
+                                                            </span>
+                                                        </td>
                                                         <td className="py-2 px-3">
                                                             <span className="font-medium text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
                                                                 {p.team_name || '—'}
@@ -5415,14 +5673,35 @@ export default function OrganizerCertificatesPage() {
                                             </select>
                                         </div>
 
-                                        <div className="pt-2 border-t border-gray-200">
+                                        <div className="pt-2 border-t border-gray-200 flex flex-col gap-1.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const lineCoords = getLineCenterCoordinates(templateDimensions)
+                                                    setLayout(prev => ({
+                                                        ...prev,
+                                                        name: {
+                                                            ...prev.name,
+                                                            x: lineCoords.x,
+                                                            y: lineCoords.y,
+                                                            align: 'center',
+                                                            enabled: true
+                                                        }
+                                                    }))
+                                                    showToast('success', `Centered Participant Name on template line (X: ${lineCoords.x}, Y: ${lineCoords.y})`)
+                                                }}
+                                                className="text-[11px] text-blue-600 hover:text-blue-700 font-bold flex items-center gap-1.5 cursor-pointer"
+                                            >
+                                                <AlignCenter size={13} />
+                                                <span>Align Center on Template Line (X: {getLineCenterCoordinates(templateDimensions).x}, Y: {getLineCenterCoordinates(templateDimensions).y})</span>
+                                            </button>
                                             <button
                                                 type="button"
                                                 onClick={() => setLayout(prev => ({ ...prev, name: { ...prev.name, x: Math.round(templateDimensions.width / 2) } }))}
-                                                className="text-[11px] text-emerald-600 hover:text-emerald-700 font-bold flex items-center gap-1.5"
+                                                className="text-[10px] text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1.5"
                                             >
-                                                <AlignCenter size={13} />
-                                                <span>Center Horizontally (X: {Math.round(templateDimensions.width / 2)})</span>
+                                                <AlignCenter size={11} />
+                                                <span>Center Canvas Width (X: {Math.round(templateDimensions.width / 2)})</span>
                                             </button>
                                         </div>
                                     </div>
@@ -6094,17 +6373,27 @@ export default function OrganizerCertificatesPage() {
                                     </div>
                                 )}
 
-                                {/* Calibration Save Buttons */}
-                                <div className="pt-3 border-t border-gray-200">
+                                {/* Calibration Save & Reset Buttons */}
+                                <div className="pt-3 border-t border-gray-200 flex flex-col sm:flex-row items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={saveLayoutConfig}
                                         disabled={savingTemplate}
-                                        className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                                        className="flex-1 w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                                         title={`Save ${selectedCertType} coordinates and template to Supabase Cloud DB`}
                                     >
                                         <CheckCircle2 size={15} className={savingTemplate ? 'animate-spin' : ''} />
                                         <span>{savingTemplate ? 'Saving Coordinates...' : `Save ${selectedCertType.split(' ')[0]} to Cloud DB`}</span>
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => pullCoordinatesFromDb(selectedCertType)}
+                                        className="w-full sm:w-auto py-2.5 px-3.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                                        title={`Pull saved coordinates for "${selectedCertType}" from Supabase Database`}
+                                    >
+                                        <Database size={14} />
+                                        <span>Pull Coordinates from DB</span>
                                     </button>
                                 </div>
                             </div>
@@ -6345,8 +6634,10 @@ export default function OrganizerCertificatesPage() {
                                                             title="Select / Deselect all in this category"
                                                         />
                                                     </th>
+                                                    <th className="py-2.5 px-2 w-12 text-center">S.No</th>
                                                     <th className="py-2.5 px-3">Participant</th>
                                                     <th className="py-2.5 px-3">Reg No</th>
+                                                    <th className="py-2.5 px-3">Cert ID</th>
                                                     <th className="py-2.5 px-3">Team</th>
                                                     <th className="py-2.5 px-3">Category</th>
                                                     <th className="py-2.5 px-3">Award Tier</th>
@@ -6356,7 +6647,7 @@ export default function OrganizerCertificatesPage() {
                                             <tbody className="divide-y divide-gray-100">
                                                 {categoryParticipants.length === 0 ? (
                                                     <tr>
-                                                        <td colSpan={7} className="py-8 text-center text-gray-400 text-xs">
+                                                        <td colSpan={9} className="py-8 text-center text-gray-400 text-xs">
                                                             No participants assigned to this category yet.
                                                         </td>
                                                     </tr>
@@ -6377,6 +6668,9 @@ export default function OrganizerCertificatesPage() {
                                                                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                                                     />
                                                                 </td>
+                                                                <td className="py-2 px-2 text-center font-mono font-bold text-slate-500 text-[11px]">
+                                                                    {idx + 1}
+                                                                </td>
                                                                 <td className="py-2 px-3">
                                                                     <div className="font-semibold text-gray-900">{p.name}</div>
                                                                     <div className="text-[10px] text-gray-500 flex items-center gap-1 font-mono">
@@ -6385,6 +6679,11 @@ export default function OrganizerCertificatesPage() {
                                                                     </div>
                                                                 </td>
                                                                 <td className="py-2 px-3 font-mono font-bold text-gray-700">{p.reg_no}</td>
+                                                                <td className="py-2 px-3 font-mono text-[11px]">
+                                                                    <span className="px-2 py-0.5 rounded font-bold bg-amber-50 text-amber-900 border border-amber-200">
+                                                                        {getExistingOrNewCertCode(p, pTier)}
+                                                                    </span>
+                                                                </td>
                                                                 <td className="py-2 px-3 text-gray-600">{p.team_name || '—'}</td>
                                                                 <td className="py-2 px-3">
                                                                     <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${p.category === 'EE Credit' ? 'bg-amber-100 text-amber-800' :

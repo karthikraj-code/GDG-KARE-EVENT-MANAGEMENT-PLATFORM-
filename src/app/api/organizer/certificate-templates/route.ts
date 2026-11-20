@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server'
 import { ensureDbUser } from '@/lib/ensureUser'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 const STORAGE_BUCKET = 'certificate-templates'
 
@@ -82,28 +83,50 @@ export async function POST(request: Request) {
         const body = await request.json()
         const { tier, fileName, imageDataUrl, dimensions, layout } = body
 
-        if (!tier || !imageDataUrl) {
-            return NextResponse.json({ error: 'Tier and imageDataUrl are required' }, { status: 400 })
+        if (!tier) {
+            return NextResponse.json({ error: 'Tier is required' }, { status: 400 })
         }
 
-        let finalImageUrl = imageDataUrl
+        let finalImageUrl = imageDataUrl || ''
 
-        // If client provided a base64 string, upload high-res image to Supabase Storage bucket
-        if (imageDataUrl.startsWith('data:image')) {
+        // If client only updated coordinates/layout without sending an image, preserve existing CDN image
+        if (!finalImageUrl) {
+            try {
+                const { data: existing } = await supabase
+                    .from('certificate_templates')
+                    .select('image_data_url')
+                    .eq('tier', tier)
+                    .maybeSingle()
+                if (existing?.image_data_url) {
+                    finalImageUrl = existing.image_data_url
+                }
+            } catch (existErr) {
+                console.warn('Could not check existing template image:', existErr)
+            }
+        }
+
+        // If client provided a base64 string, upload to Supabase Storage bucket
+        if (finalImageUrl && finalImageUrl.startsWith('data:image')) {
             try {
                 await ensureStorageBucket(supabase)
-                const matches = imageDataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
+                const matches = finalImageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
                 if (matches) {
                     const mimeType = matches[1]
                     const base64Data = matches[2]
                     const buffer = Buffer.from(base64Data, 'base64')
-                    const ext = mimeType.includes('png') ? 'png' : mimeType.includes('svg') ? 'svg' : 'jpg'
+                    let ext = 'png'
+                    if (mimeType.includes('webp')) ext = 'webp'
+                    else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg'
+                    else if (mimeType.includes('svg')) ext = 'svg'
+
                     let tierSlug = 'participation'
                     if (/winner\s*1/i.test(tier)) tierSlug = 'winner_1'
                     else if (/winner\s*2/i.test(tier)) tierSlug = 'winner_2'
                     else if (/winner\s*3/i.test(tier)) tierSlug = 'winner_3'
                     else tierSlug = tier.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-                    const storagePath = `templates/${tierSlug}.${ext}`
+
+                    // Timestamped path to invalidate any CDN caching when a template is re-uploaded
+                    const storagePath = `templates/${tierSlug}_${Date.now()}.${ext}`
 
                     const { error: upErr } = await supabase.storage
                         .from(STORAGE_BUCKET)
@@ -162,9 +185,8 @@ export async function POST(request: Request) {
     } catch (err: any) {
         console.error('Error saving template:', err)
         return NextResponse.json({ 
-            success: true, 
-            savedLocally: true, 
-            warning: 'Fallback to local storage' 
-        })
+            success: false, 
+            error: err.message || 'Internal Server Error' 
+        }, { status: 500 })
     }
 }
